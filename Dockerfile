@@ -1,4 +1,4 @@
-FROM cgr.dev/chainguard-private/bun:latest
+FROM cgr.dev/andrewd.dev/bun:latest
 WORKDIR /app
 COPY server.js index.html ./
 EXPOSE 3000
