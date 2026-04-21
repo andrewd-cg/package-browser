@@ -21,7 +21,7 @@ Enter a package name (or Maven `groupId:artifactId`) and get a side-by-side tabl
 ### Option 1: Docker (recommended)
 
 ```bash
-docker run -p 3000:3000 ghcr.io/andrewd-cg/npm-browser:latest
+docker run -p 3000:3000 ghcr.io/andrewd-cg/package-browser:latest
 ```
 
 Or with Docker Compose:
