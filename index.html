@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>NPM Package Browser</title>
+<title>Package Browser</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -13,6 +13,11 @@
     color: #1a1a2e;
     min-height: 100vh;
   }
+
+  /* Accent per active tab */
+  [data-active-tab="npm"]   { --accent: #7dd3fc; --accent-glow: rgba(125,211,252,0.15); }
+  [data-active-tab="maven"] { --accent: #86efac; --accent-glow: rgba(134,239,172,0.15); }
+  [data-active-tab="pypi"]  { --accent: #fde68a; --accent-glow: rgba(253,230,138,0.15); }
 
   /* Header */
   header {
@@ -27,13 +32,27 @@
     top: 0;
     z-index: 100;
     box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    gap: 1rem;
   }
-  header h1 {
-    font-size: 1rem;
-    font-weight: 600;
-    letter-spacing: 0.02em;
+  header h1 { font-size: 1rem; font-weight: 600; letter-spacing: 0.02em; white-space: nowrap; }
+  header h1 span { color: var(--accent); }
+
+  /* Tab nav */
+  .tab-nav { display: flex; gap: 0.25rem; }
+  .tab-btn {
+    background: none;
+    border: none;
+    color: #64748b;
+    cursor: pointer;
+    padding: 5px 14px;
+    border-radius: 6px;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: background 0.15s, color 0.15s;
   }
-  header h1 span { color: #7dd3fc; }
+  .tab-btn:hover { background: rgba(255,255,255,0.08); color: #cbd5e1; }
+  .tab-btn.active { background: rgba(255,255,255,0.12); color: var(--accent); }
+
   #settings-btn {
     background: none;
     border: none;
@@ -44,9 +63,10 @@
     display: flex;
     align-items: center;
     transition: background 0.15s, color 0.15s;
+    flex-shrink: 0;
   }
   #settings-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
-  #settings-btn.active { color: #7dd3fc; }
+  #settings-btn.active { color: var(--accent); }
 
   /* Settings panel */
   #settings-panel {
@@ -56,13 +76,15 @@
     display: none;
   }
   #settings-panel.open { display: block; }
-  #settings-panel h2 {
+  .settings-section { margin-bottom: 1.25rem; }
+  .settings-section:last-child { margin-bottom: 0; }
+  .settings-section h2 {
     font-size: 0.8rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: #64748b;
-    margin-bottom: 1rem;
+    margin-bottom: 0.75rem;
   }
   .settings-row {
     display: flex;
@@ -70,11 +92,7 @@
     gap: 0.75rem;
     flex-wrap: wrap;
   }
-  .settings-row label {
-    font-size: 0.875rem;
-    color: #475569;
-    min-width: 130px;
-  }
+  .settings-row label { font-size: 0.875rem; color: #475569; min-width: 130px; }
   .settings-row input {
     border: 1px solid #cbd5e1;
     border-radius: 6px;
@@ -84,25 +102,50 @@
     outline: none;
     transition: border-color 0.15s;
   }
-  .settings-row input:focus { border-color: #7dd3fc; }
-  .settings-saved {
-    font-size: 0.78rem;
-    color: #22c55e;
-    opacity: 0;
-    transition: opacity 0.3s;
+  .settings-row input:focus { border-color: var(--accent); }
+  .save-btn {
+    background: #1a1a2e;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    padding: 6px 14px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background 0.15s;
+    white-space: nowrap;
   }
-  .settings-saved.show { opacity: 1; }
+  .save-btn:hover { background: #2d2d50; }
+  .save-btn:disabled { background: #94a3b8; cursor: default; }
+  .save-status {
+    font-size: 0.78rem;
+    font-weight: 500;
+    min-width: 140px;
+  }
+  .save-status.ok    { color: #16a34a; }
+  .save-status.error { color: #dc2626; }
+  .save-status.busy  { color: #64748b; }
+  .cred-hint {
+    font-size: 0.75rem;
+    color: #94a3b8;
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 5px;
+    padding: 3px 8px;
+    user-select: all;
+    white-space: nowrap;
+  }
 
   /* Main content */
-  main { max-width: 900px; margin: 2rem auto; padding: 0 1.5rem; }
+  main { max-width: 960px; margin: 2rem auto; padding: 0 1.5rem; }
+
+  .tab-pane { display: none; }
+  .tab-pane.active { display: block; }
 
   /* Search */
-  .search-box {
-    display: flex;
-    gap: 0.5rem;
-    margin-bottom: 1.5rem;
-  }
-  #pkg-input {
+  .search-box { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+  .pkg-input {
     flex: 1;
     border: 1px solid #cbd5e1;
     border-radius: 8px;
@@ -112,11 +155,11 @@
     background: #fff;
     transition: border-color 0.15s, box-shadow 0.15s;
   }
-  #pkg-input:focus {
-    border-color: #7dd3fc;
-    box-shadow: 0 0 0 3px rgba(125,211,252,0.15);
+  .pkg-input:focus {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
   }
-  #fetch-btn {
+  .fetch-btn {
     background: #1a1a2e;
     color: #fff;
     border: none;
@@ -128,16 +171,11 @@
     transition: background 0.15s;
     white-space: nowrap;
   }
-  #fetch-btn:hover { background: #2d2d50; }
-  #fetch-btn:disabled { background: #94a3b8; cursor: default; }
+  .fetch-btn:hover { background: #2d2d50; }
+  .fetch-btn:disabled { background: #94a3b8; cursor: default; }
 
   /* Filters */
-  .filter-row {
-    display: flex;
-    gap: 1.25rem;
-    margin-bottom: 1rem;
-    flex-wrap: wrap;
-  }
+  .filter-row { display: flex; gap: 1.25rem; margin-bottom: 1rem; flex-wrap: wrap; }
   .filter-label {
     display: flex;
     align-items: center;
@@ -149,21 +187,14 @@
   }
   .filter-label input[type="checkbox"] { cursor: pointer; accent-color: #1a1a2e; }
 
-  /* Error banners */
+  /* Banners */
   .banners { display: flex; flex-direction: column; gap: 0.5rem; margin-bottom: 1rem; }
-  .banner {
-    padding: 8px 14px;
-    border-radius: 6px;
-    font-size: 0.85rem;
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-  }
-  .banner.warn { background: #fef9c3; color: #854d0e; border: 1px solid #fde68a; }
+  .banner { padding: 8px 14px; border-radius: 6px; font-size: 0.85rem; display: flex; align-items: center; gap: 0.5rem; }
+  .banner.warn  { background: #fef9c3; color: #854d0e; border: 1px solid #fde68a; }
   .banner.error { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
 
-  /* Results */
-  #results { background: #fff; border-radius: 10px; border: 1px solid #e2e8f0; overflow: hidden; }
+  /* Results card */
+  .results { background: #fff; border-radius: 10px; border: 1px solid #e2e8f0; overflow: hidden; }
 
   .results-header {
     padding: 0.9rem 1.25rem;
@@ -177,14 +208,10 @@
   .results-title { display: flex; align-items: baseline; gap: 0.6rem; }
   .results-header .pkg-name { font-weight: 600; font-size: 1rem; color: #1a1a2e; text-decoration: none; }
   .results-header .pkg-name:hover { text-decoration: underline; color: #2563eb; }
+  .results-header .pkg-name.mono { font-family: 'SFMono-Regular', Consolas, monospace; }
   .results-header .count { font-size: 0.8rem; color: #64748b; }
 
-  .stats-row {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    flex-wrap: wrap;
-  }
+  .stats-row { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
   .stat-block {
     display: flex;
     flex-direction: column;
@@ -204,7 +231,7 @@
   .stat-divider { width: 1px; height: 32px; background: #e2e8f0; margin: 0 0.25rem; }
 
   .header-right { display: flex; flex-direction: column; align-items: flex-end; gap: 0.5rem; }
-  #copy-btn {
+  .copy-btn {
     background: #f8fafc;
     border: 1px solid #cbd5e1;
     border-radius: 6px;
@@ -216,16 +243,11 @@
     transition: background 0.15s, color 0.15s, border-color 0.15s;
     white-space: nowrap;
   }
-  #copy-btn:hover { background: #e2e8f0; color: #1a1a2e; border-color: #94a3b8; }
-  #copy-btn.copied { background: #f0fdf4; color: #16a34a; border-color: #86efac; }
+  .copy-btn:hover { background: #e2e8f0; color: #1a1a2e; border-color: #94a3b8; }
+  .copy-btn.copied { background: #f0fdf4; color: #16a34a; border-color: #86efac; }
 
   .table-wrap { overflow-x: auto; }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    font-size: 0.875rem;
-  }
+  table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
   thead tr { background: #f8fafc; }
   th {
     padding: 10px 16px;
@@ -238,11 +260,7 @@
     border-bottom: 1px solid #e2e8f0;
     white-space: nowrap;
   }
-  td {
-    padding: 9px 16px;
-    border-bottom: 1px solid #f1f5f9;
-    vertical-align: middle;
-  }
+  td { padding: 9px 16px; border-bottom: 1px solid #f1f5f9; vertical-align: middle; }
   tbody tr:last-child td { border-bottom: none; }
   tbody tr:hover { background: #f8fafc; }
   tbody tr.latest { background: #f0fdf4; }
@@ -265,7 +283,6 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
-
   .date-cell { font-size: 0.82rem; color: #64748b; white-space: nowrap; }
   .check-cell { text-align: center; }
   .check-link {
@@ -291,32 +308,33 @@
     letter-spacing: 0.04em;
     white-space: nowrap;
   }
-  .cgr-badge.built { background: #dbeafe; color: #1d4ed8; }
+  .cgr-badge.built  { background: #dbeafe; color: #1d4ed8; }
   .cgr-badge.mirror { background: #f3e8ff; color: #7e22ce; }
+  .cross { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; color: #cbd5e1; font-size: 1.1rem; }
 
-  .cross {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 28px;
-    height: 28px;
-    color: #cbd5e1;
-    font-size: 1.1rem;
-  }
+  /* Loading steps (maven) */
+  .fetch-steps { display: flex; flex-direction: column; gap: 0.6rem; align-items: flex-start; }
+  .fetch-step { display: flex; align-items: center; gap: 0.6rem; font-size: 0.875rem; color: #475569; }
+  .step-icon { width: 18px; height: 18px; border-radius: 50%; flex-shrink: 0; display: inline-flex; align-items: center; justify-content: center; }
+  .step-icon.pending { border: 2px solid #e2e8f0; border-top-color: var(--accent, #86efac); animation: spin 0.7s linear infinite; }
+  .step-icon.done { background: #22c55e; }
+  .step-icon.done::after { content: '✓'; font-size: 0.7rem; color: #fff; }
+  .step-icon.fail { background: #f87171; }
+  .step-icon.fail::after { content: '✗'; font-size: 0.7rem; color: #fff; }
 
-  /* Loading spinner */
+  /* Spinner */
   .spinner {
     display: inline-block;
     width: 18px;
     height: 18px;
     border: 2px solid #e2e8f0;
-    border-top-color: #7dd3fc;
+    border-top-color: var(--accent, #7dd3fc);
     border-radius: 50%;
     animation: spin 0.7s linear infinite;
   }
   @keyframes spin { to { transform: rotate(360deg); } }
 
-  #status {
+  .status-placeholder {
     text-align: center;
     padding: 3rem 1rem;
     color: #94a3b8;
@@ -326,13 +344,17 @@
     align-items: center;
     gap: 0.75rem;
   }
-  #status.hidden { display: none; }
 </style>
 </head>
-<body>
+<body data-active-tab="npm">
 
 <header>
-  <h1>npm <span>package browser</span></h1>
+  <h1><span id="tab-label">npm</span> package browser</h1>
+  <nav class="tab-nav">
+    <button class="tab-btn active" data-tab="npm">npm</button>
+    <button class="tab-btn" data-tab="maven">maven</button>
+    <button class="tab-btn" data-tab="pypi">pypi</button>
+  </nav>
   <button id="settings-btn" title="Settings" aria-label="Settings">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="12" cy="12" r="3"/>
@@ -342,68 +364,293 @@
 </header>
 
 <div id="settings-panel">
-  <h2>Chainguard Registry (libraries.cgr.dev)</h2>
-  <div class="settings-row">
-    <label for="cgr-user">Username</label>
-    <input type="text" id="cgr-user" placeholder="a3f7c92e1d048b5619ace7f23b840d12e5a9c671/82fb4c01d7e93a50" autocomplete="username">
-    <label for="cgr-pass" style="margin-left:0.5rem">Password / Token</label>
-    <input type="password" id="cgr-pass" placeholder="••••••••" autocomplete="current-password">
-    <span class="settings-saved" id="saved-msg">Saved</span>
+  <div class="settings-section">
+    <h2>npm — Chainguard JS (libraries.cgr.dev/javascript)</h2>
+    <div class="settings-row">
+      <label for="npm-cgr-user">Username</label>
+      <input type="text" id="npm-cgr-user" placeholder="a3f7c92e1d048b5619ace7f23b840d12e5a9c671/82fb4c01d7e93a50" autocomplete="username">
+      <label for="npm-cgr-pass" style="margin-left:0.5rem">Password / Token</label>
+      <input type="password" id="npm-cgr-pass" placeholder="••••••••" autocomplete="current-password">
+      <button class="save-btn" id="npm-save-btn" onclick="saveCreds('npm')">Save</button>
+      <span class="save-status" id="npm-save-status"></span>
+      <code class="cred-hint">chainctl auth pull-token --repository=javascript --parent=&lt;ORG_NAME&gt;</code>
+    </div>
+  </div>
+  <div class="settings-section">
+    <h2>maven — Chainguard Java (libraries.cgr.dev/java)</h2>
+    <div class="settings-row">
+      <label for="maven-cgr-user">Username</label>
+      <input type="text" id="maven-cgr-user" placeholder="a3f7c92e1d048b5619ace7f23b840d12e5a9c671/82fb4c01d7e93a50" autocomplete="username">
+      <label for="maven-cgr-pass" style="margin-left:0.5rem">Password / Token</label>
+      <input type="password" id="maven-cgr-pass" placeholder="••••••••" autocomplete="current-password">
+      <button class="save-btn" id="maven-save-btn" onclick="saveCreds('maven')">Save</button>
+      <span class="save-status" id="maven-save-status"></span>
+      <code class="cred-hint">chainctl auth pull-token --repository=java --parent=&lt;ORG_NAME&gt;</code>
+    </div>
+  </div>
+  <div class="settings-section">
+    <h2>pypi — Chainguard Python (libraries.cgr.dev/python)</h2>
+    <div class="settings-row">
+      <label for="pypi-cgr-user">Username</label>
+      <input type="text" id="pypi-cgr-user" placeholder="a3f7c92e1d048b5619ace7f23b840d12e5a9c671/82fb4c01d7e93a50" autocomplete="username">
+      <label for="pypi-cgr-pass" style="margin-left:0.5rem">Password / Token</label>
+      <input type="password" id="pypi-cgr-pass" placeholder="••••••••" autocomplete="current-password">
+      <button class="save-btn" id="pypi-save-btn" onclick="saveCreds('pypi')">Save</button>
+      <span class="save-status" id="pypi-save-status"></span>
+      <code class="cred-hint">chainctl auth pull-token --repository=python --parent=&lt;ORG_NAME&gt;</code>
+    </div>
   </div>
 </div>
 
 <main>
-  <form class="search-box" id="search-form">
-    <input type="text" id="pkg-input" placeholder="Package name (e.g. react, express, lodash)" autocomplete="off" spellcheck="false">
-    <button type="submit" id="fetch-btn">Fetch versions</button>
-  </form>
-
-  <div class="filter-row">
-    <label class="filter-label"><input type="checkbox" id="show-all"> Show all versions</label>
-    <label class="filter-label"><input type="checkbox" id="show-prerelease"> Show pre-release (alpha / beta / canary / rc)</label>
+  <!-- npm tab -->
+  <div id="tab-npm" class="tab-pane active">
+    <form class="search-box" id="npm-form">
+      <input type="text" class="pkg-input" id="npm-input" placeholder="Package name (e.g. react, express, lodash)" autocomplete="off" spellcheck="false">
+      <button type="submit" class="fetch-btn" id="npm-btn">Fetch versions</button>
+    </form>
+    <div class="filter-row">
+      <label class="filter-label"><input type="checkbox" id="npm-show-all"> Show all versions</label>
+      <label class="filter-label"><input type="checkbox" id="npm-show-prerelease"> Show pre-release (alpha / beta / canary / rc)</label>
+    </div>
+    <div class="banners" id="npm-banners"></div>
+    <div class="results" id="npm-results">
+      <div class="status-placeholder">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        Enter a package name above to compare versions
+      </div>
+    </div>
   </div>
 
-  <div class="banners" id="banners"></div>
+  <!-- maven tab -->
+  <div id="tab-maven" class="tab-pane">
+    <form class="search-box" id="maven-form">
+      <input type="text" class="pkg-input" id="maven-input" placeholder="groupId:artifactId (e.g. com.google.guava:guava)" autocomplete="off" spellcheck="false" style="font-family:'SFMono-Regular',Consolas,monospace">
+      <button type="submit" class="fetch-btn" id="maven-btn">Fetch versions</button>
+    </form>
+    <div class="filter-row">
+      <label class="filter-label"><input type="checkbox" id="maven-show-all"> Show all versions</label>
+      <label class="filter-label"><input type="checkbox" id="maven-show-prerelease"> Show pre-release (alpha / beta / RC / snapshot)</label>
+    </div>
+    <div class="banners" id="maven-banners"></div>
+    <div class="results" id="maven-results">
+      <div class="status-placeholder">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        Enter a Maven coordinate above to compare versions
+      </div>
+    </div>
+  </div>
 
-  <div id="results">
-    <div id="status">
-      <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
-      Enter a package name above to compare versions
+  <!-- pypi tab -->
+  <div id="tab-pypi" class="tab-pane">
+    <form class="search-box" id="pypi-form">
+      <input type="text" class="pkg-input" id="pypi-input" placeholder="Package name (e.g. requests, numpy, flask)" autocomplete="off" spellcheck="false">
+      <button type="submit" class="fetch-btn" id="pypi-btn">Fetch versions</button>
+    </form>
+    <div class="filter-row">
+      <label class="filter-label"><input type="checkbox" id="pypi-show-all"> Show all versions</label>
+      <label class="filter-label"><input type="checkbox" id="pypi-show-prerelease"> Show pre-release (a / b / rc / dev / post)</label>
+    </div>
+    <div class="banners" id="pypi-banners"></div>
+    <div class="results" id="pypi-results">
+      <div class="status-placeholder">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+        Enter a package name above to compare versions
+      </div>
     </div>
   </div>
 </main>
 
 <script>
-const STORAGE_USER = 'npm-browser-cgr-user';
-const STORAGE_PASS = 'npm-browser-cgr-pass';
+// ── Shared utilities ──────────────────────────────────────────────────────────
 
-// --- Settings ---
+function escHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+const dateFmt = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+function formatDate(ts) {
+  const d = new Date(typeof ts === 'number' ? ts : ts);
+  if (isNaN(d)) return '';
+  const days = Math.floor((Date.now() - d) / 86400000);
+  return `${dateFmt.format(d)} (${days}d ago)`;
+}
+
+function copyToClipboard(text, btn) {
+  const confirm = () => {
+    if (!btn) return;
+    btn.textContent = 'Copied!';
+    btn.classList.add('copied');
+    setTimeout(() => { btn.textContent = 'Copy results'; btn.classList.remove('copied'); }, 2000);
+  };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(text).then(confirm);
+  } else {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    confirm();
+  }
+}
+
+function checkCell(url) {
+  if (!url) return `<span class="cross" title="Not available">✗</span>`;
+  return `<a class="check-link" href="${escHtml(url)}" target="_blank" rel="noopener" title="${escHtml(url)}">✓</a>`;
+}
+
+function cgrCheckCell(type, url) {
+  if (!type) return `<span class="cross" title="Not available">✗</span>`;
+  const badge = type === 'built'
+    ? `<span class="cgr-badge built" title="Built by Chainguard">Built</span>`
+    : `<span class="cgr-badge mirror" title="Mirrored from upstream">Secure Mirror</span>`;
+  return `<span class="check-wrap"><a class="check-link" href="${escHtml(url)}" target="_blank" rel="noopener">✓</a>${badge}</span>`;
+}
+
+function npmCgrCheckCell(tarball) {
+  if (!tarball) return `<span class="cross" title="Not available">✗</span>`;
+  let badge = '';
+  if (tarball.includes('libraries.cgr.dev/javascript-upstream/')) {
+    badge = `<span class="cgr-badge mirror" title="Mirrored from upstream">Secure Mirror</span>`;
+  } else if (tarball.includes('libraries.cgr.dev/javascript/')) {
+    badge = `<span class="cgr-badge built" title="Built by Chainguard">Built</span>`;
+  }
+  return `<span class="check-wrap"><a class="check-link" href="${escHtml(tarball)}" target="_blank" rel="noopener" title="${escHtml(tarball)}">✓</a>${badge}</span>`;
+}
+
+function statsHtml(registry1Label, r1Count, cgrCount, total, cgrBuilt, cgrMirror) {
+  const pct = (n, d) => d ? Math.round(n / d * 100) : 0;
+  const cgrPct    = pct(cgrCount, total);
+  const builtPct  = pct(cgrBuilt, cgrCount);
+  const mirrorPct = pct(cgrMirror, cgrCount);
+  return { cgrPct, builtPct, mirrorPct, html: `
+    <div class="stats-row">
+      <div class="stat-block">
+        <span class="stat-label">${escHtml(registry1Label)}</span>
+        <span class="stat-value">${r1Count}</span>
+      </div>
+      <div class="stat-divider"></div>
+      <div class="stat-block">
+        <span class="stat-label">In Chainguard</span>
+        <span class="stat-value">${cgrCount} <span class="stat-pct">${cgrPct}%</span></span>
+      </div>
+      <div class="stat-block stat-sub">
+        <span class="stat-label">Built</span>
+        <span class="stat-value">${cgrBuilt} <span class="stat-pct built">${builtPct}%</span></span>
+      </div>
+      <div class="stat-block stat-sub">
+        <span class="stat-label">Mirrored</span>
+        <span class="stat-value">${cgrMirror} <span class="stat-pct mirror">${mirrorPct}%</span></span>
+      </div>
+    </div>`
+  };
+}
+
+// ── Settings ──────────────────────────────────────────────────────────────────
+
+const CREDS = {
+  npm:   { user: 'cgr-npm-user',   pass: 'cgr-npm-pass'   },
+  maven: { user: 'cgr-maven-user', pass: 'cgr-maven-pass' },
+  pypi:  { user: 'cgr-pypi-user',  pass: 'cgr-pypi-pass'  },
+};
+
+function getCreds(eco) {
+  return {
+    user: localStorage.getItem(CREDS[eco].user) || '',
+    pass: localStorage.getItem(CREDS[eco].pass) || '',
+  };
+}
+
+// Load saved creds into inputs
+for (const [eco, keys] of Object.entries(CREDS)) {
+  document.getElementById(`${eco}-cgr-user`).value = localStorage.getItem(keys.user) || '';
+  document.getElementById(`${eco}-cgr-pass`).value = localStorage.getItem(keys.pass) || '';
+}
+
 const settingsBtn = document.getElementById('settings-btn');
 const settingsPanel = document.getElementById('settings-panel');
-const cgrUser = document.getElementById('cgr-user');
-const cgrPass = document.getElementById('cgr-pass');
-const savedMsg = document.getElementById('saved-msg');
-
-cgrUser.value = localStorage.getItem(STORAGE_USER) || '';
-cgrPass.value = localStorage.getItem(STORAGE_PASS) || '';
-
 settingsBtn.addEventListener('click', () => {
   settingsPanel.classList.toggle('open');
   settingsBtn.classList.toggle('active', settingsPanel.classList.contains('open'));
 });
 
-let saveTimer;
-function saveCredentials() {
-  localStorage.setItem(STORAGE_USER, cgrUser.value);
-  localStorage.setItem(STORAGE_PASS, cgrPass.value);
-  savedMsg.classList.add('show');
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(() => savedMsg.classList.remove('show'), 1800);
-}
-cgrUser.addEventListener('input', saveCredentials);
-cgrPass.addEventListener('input', saveCredentials);
+const TEST_ENDPOINTS = {
+  npm:   () => '/api/cgr/express',
+  maven: () => '/api/cgr-java?group=org.springframework.boot&artifact=spring-boot&repo=java',
+  pypi:  () => '/api/cgr-python/simple/requests/',
+};
 
-// --- Semver sort ---
+async function saveCreds(eco) {
+  const userEl   = document.getElementById(`${eco}-cgr-user`);
+  const passEl   = document.getElementById(`${eco}-cgr-pass`);
+  const statusEl = document.getElementById(`${eco}-save-status`);
+  const btnEl    = document.getElementById(`${eco}-save-btn`);
+
+  localStorage.setItem(CREDS[eco].user, userEl.value);
+  localStorage.setItem(CREDS[eco].pass, passEl.value);
+
+  if (!userEl.value) {
+    statusEl.className = 'save-status ok';
+    statusEl.textContent = 'Cleared';
+    setTimeout(() => { statusEl.textContent = ''; statusEl.className = 'save-status'; }, 2000);
+    return;
+  }
+
+  btnEl.disabled = true;
+  statusEl.className = 'save-status busy';
+  statusEl.textContent = 'Testing credentials…';
+
+  try {
+    const res = await fetch(TEST_ENDPOINTS[eco](), {
+      headers: { 'x-cgr-user': userEl.value, 'x-cgr-pass': passEl.value },
+    });
+    if (res.status === 401) {
+      statusEl.className = 'save-status error';
+      statusEl.textContent = '✗ Invalid credentials (401)';
+    } else if (res.status === 403) {
+      statusEl.className = 'save-status error';
+      statusEl.textContent = '✗ Access denied (403)';
+    } else {
+      statusEl.className = 'save-status ok';
+      statusEl.textContent = '✓ Saved — credentials valid';
+      setTimeout(() => { statusEl.textContent = ''; statusEl.className = 'save-status'; }, 3000);
+    }
+  } catch (err) {
+    statusEl.className = 'save-status error';
+    statusEl.textContent = `✗ ${err.message}`;
+  } finally {
+    btnEl.disabled = false;
+  }
+}
+
+// ── Tab switching ─────────────────────────────────────────────────────────────
+
+const tabBtns = document.querySelectorAll('.tab-btn');
+const tabLabel = document.getElementById('tab-label');
+
+tabBtns.forEach(btn => {
+  btn.addEventListener('click', () => {
+    const tab = btn.dataset.tab;
+    tabBtns.forEach(b => b.classList.toggle('active', b === btn));
+    document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id === `tab-${tab}`));
+    document.body.dataset.activeTab = tab;
+    tabLabel.textContent = tab;
+  });
+});
+
+// ── State ─────────────────────────────────────────────────────────────────────
+
+const state = {
+  npm:   { lastData: null, lastSnapshot: null },
+  maven: { lastData: null, lastSnapshot: null },
+  pypi:  { lastData: null, lastSnapshot: null },
+};
+
+// ── npm tab ───────────────────────────────────────────────────────────────────
+
 function semverParse(v) {
   const [main = '', pre = ''] = v.split(/-(.+)/);
   const parts = main.split('.').map(s => parseInt(s, 10) || 0);
@@ -422,40 +669,24 @@ function semverCompare(a, b) {
   return 0;
 }
 
-// --- Fetch ---
-async function fetchRegistry(url, headers = {}) {
-  const res = await fetch(url, { headers });
-  if (!res.ok) {
-    const err = new Error(`HTTP ${res.status}`);
-    err.status = res.status;
-    throw err;
-  }
-  return res.json();
-}
-
-async function lookupPackage(pkg) {
-  const user = localStorage.getItem(STORAGE_USER) || '';
-  const pass = localStorage.getItem(STORAGE_PASS) || '';
-
+async function npmLookup(pkg) {
+  const { user, pass } = getCreds('npm');
   const npmUrl = `https://registry.npmjs.org/${encodeURIComponent(pkg)}`;
-  // Route cgr.dev through local proxy to avoid CORS issues
   const cgrUrl = `/api/cgr/${encodeURIComponent(pkg)}`;
   const cgrHeaders = user ? { 'x-cgr-user': user, 'x-cgr-pass': pass } : {};
 
   const [npmRes, cgrRes] = await Promise.allSettled([
-    fetchRegistry(npmUrl),
-    fetchRegistry(cgrUrl, cgrHeaders),
+    fetch(npmUrl).then(r => { if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.status = r.status; throw e; } return r.json(); }),
+    fetch(cgrUrl, { headers: cgrHeaders }).then(r => { if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.status = r.status; throw e; } return r.json(); }),
   ]);
 
   const npmData = npmRes.status === 'fulfilled' ? npmRes.value : null;
   const cgrData = cgrRes.status === 'fulfilled' ? cgrRes.value : null;
-  const npmError = npmRes.status === 'rejected' ? npmRes.reason : null;
-  const cgrError = cgrRes.status === 'rejected' ? cgrRes.reason : null;
 
   const npmVersions = npmData?.versions || {};
   const cgrVersions = cgrData?.versions || {};
-  const npmLatest = npmData?.['dist-tags']?.latest || null;
-  const npmTime = npmData?.time || {};
+  const npmLatest   = npmData?.['dist-tags']?.latest || null;
+  const npmTime     = npmData?.time || {};
 
   const allVersions = new Set([...Object.keys(npmVersions), ...Object.keys(cgrVersions)]);
   const sorted = [...allVersions].sort(semverCompare).reverse();
@@ -469,39 +700,25 @@ async function lookupPackage(pkg) {
       npmTarball: npmVersions[v]?.dist?.tarball || null,
       cgrTarball: cgrVersions[v]?.dist?.tarball || null,
     })),
-    npmError,
-    cgrError,
+    npmError: npmRes.status === 'rejected' ? npmRes.reason : null,
+    cgrError: cgrRes.status === 'rejected' ? cgrRes.reason : null,
   };
 }
 
-// --- Filters ---
-let lastData = null;
-let lastSnapshot = null;
-const LIMIT = 50;
-const PRE_RE = /-(alpha|beta|canary|rc|next|dev|preview|experimental)\b/i;
-
-function applyFilters(rows) {
+function npmApplyFilters(rows) {
   let out = rows;
-  if (!document.getElementById('show-prerelease').checked) {
-    out = out.filter(r => !r.version.includes('-'));
-  }
-  if (!document.getElementById('show-all').checked) {
-    out = out.slice(0, LIMIT);
-  }
+  if (!document.getElementById('npm-show-prerelease').checked) out = out.filter(r => !r.version.includes('-'));
+  if (!document.getElementById('npm-show-all').checked) out = out.slice(0, 50);
   return out;
 }
 
-document.getElementById('show-all').addEventListener('change', () => { if (lastData) renderTable(lastData); });
-document.getElementById('show-prerelease').addEventListener('change', () => { if (lastData) renderTable(lastData); });
-
-// --- Render ---
-function renderBanners(npmError, cgrError, pkg) {
-  const container = document.getElementById('banners');
+function npmRenderBanners(npmError, cgrError, pkg) {
+  const container = document.getElementById('npm-banners');
   container.innerHTML = '';
   if (npmError) {
     const b = document.createElement('div');
     b.className = `banner ${npmError.status === 404 ? 'warn' : 'error'}`;
-    b.textContent = `npmjs.com: ${npmError.status === 404 ? `package "${pkg}" not found` : npmError.message}`;
+    b.textContent = npmError.status === 404 ? `npmjs.com: package "${pkg}" not found` : `npmjs.com: ${npmError.message}`;
     container.appendChild(b);
   }
   if (cgrError) {
@@ -509,34 +726,29 @@ function renderBanners(npmError, cgrError, pkg) {
     b.className = `banner ${cgrError.status === 401 ? 'error' : cgrError.status === 404 ? 'warn' : 'error'}`;
     b.textContent = cgrError.status === 401
       ? 'libraries.cgr.dev: Unauthorized — check credentials in Settings'
-      : cgrError.status === 404
-      ? `libraries.cgr.dev: package "${pkg}" not found`
+      : cgrError.status === 404 ? `libraries.cgr.dev: package "${pkg}" not found`
       : `libraries.cgr.dev: ${cgrError.message}`;
     container.appendChild(b);
   }
 }
 
-function renderTable(data) {
+function npmRenderTable(data) {
   const { name, latest, rows: allRows } = data;
-  const resultsEl = document.getElementById('results');
-  const rows = applyFilters(allRows);
+  const el = document.getElementById('npm-results');
+  const rows = npmApplyFilters(allRows);
 
   if (allRows.length === 0) {
-    resultsEl.innerHTML = `<div id="status">No versions found for <strong>${escHtml(name)}</strong></div>`;
+    el.innerHTML = `<div class="status-placeholder">No versions found for <strong>${escHtml(name)}</strong></div>`;
     return;
   }
 
-  const total = rows.length;
-  const npmCount = rows.filter(r => r.npmTarball).length;
+  const total      = rows.length;
+  const npmCount   = rows.filter(r => r.npmTarball).length;
   const cgrBuilt   = rows.filter(r => r.cgrTarball && r.cgrTarball.includes('cgr.dev/javascript/') && !r.cgrTarball.includes('javascript-upstream')).length;
   const cgrMirror  = rows.filter(r => r.cgrTarball && r.cgrTarball.includes('javascript-upstream')).length;
   const cgrCount   = cgrBuilt + cgrMirror;
   const countNote  = total < allRows.length ? `showing ${total} of ${allRows.length}` : `${total} version${total !== 1 ? 's' : ''}`;
-
-  const pct = (n, d) => d ? Math.round(n / d * 100) : 0;
-  const cgrPct    = pct(cgrCount, total);
-  const builtPct  = pct(cgrBuilt, cgrCount);
-  const mirrorPct = pct(cgrMirror, cgrCount);
+  const { cgrPct, builtPct, mirrorPct, html: statsH } = statsHtml('npmjs.com', npmCount, cgrCount, total, cgrBuilt, cgrMirror);
 
   let html = `
     <div class="results-header">
@@ -545,166 +757,553 @@ function renderTable(data) {
         <span class="count">${escHtml(countNote)}</span>
       </div>
       <div class="header-right">
-      <div class="stats-row">
-        <div class="stat-block">
-          <span class="stat-label">npmjs.com</span>
-          <span class="stat-value">${npmCount}</span>
-        </div>
-        <div class="stat-divider"></div>
-        <div class="stat-block">
-          <span class="stat-label">In Chainguard</span>
-          <span class="stat-value">${cgrCount} <span class="stat-pct">${cgrPct}%</span></span>
-        </div>
-        <div class="stat-block stat-sub">
-          <span class="stat-label">Built</span>
-          <span class="stat-value">${cgrBuilt} <span class="stat-pct built">${builtPct}%</span></span>
-        </div>
-        <div class="stat-block stat-sub">
-          <span class="stat-label">Mirrored</span>
-          <span class="stat-value">${cgrMirror} <span class="stat-pct mirror">${mirrorPct}%</span></span>
-        </div>
-      </div>
-      <button id="copy-btn" onclick="copyResults()">Copy results</button>
+        ${statsH}
+        <button class="copy-btn" id="npm-copy-btn" onclick="npmCopyResults()">Copy results</button>
       </div>
     </div>
-    <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th>Version</th>
-          <th>Published</th>
-          <th style="text-align:center">npmjs.com</th>
-          <th style="text-align:center">Chainguard</th>
-        </tr>
-      </thead>
-      <tbody>
-  `;
+    <div class="table-wrap"><table>
+      <thead><tr><th>Version</th><th>Published</th><th style="text-align:center">npmjs.com</th><th style="text-align:center">Chainguard</th></tr></thead>
+      <tbody>`;
 
   for (const row of rows) {
     const isLatest = row.version === latest;
     html += `<tr${isLatest ? ' class="latest"' : ''}>`;
     html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}</div></td>`;
     html += `<td class="date-cell">${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
-    html += `<td class="check-cell">${tarballCell(row.npmTarball)}</td>`;
-    html += `<td class="check-cell">${tarballCell(row.cgrTarball, true)}</td>`;
+    html += `<td class="check-cell">${checkCell(row.npmTarball)}</td>`;
+    html += `<td class="check-cell">${npmCgrCheckCell(row.cgrTarball)}</td>`;
     html += `</tr>`;
   }
-
   html += `</tbody></table></div>`;
-  resultsEl.innerHTML = html;
+  el.innerHTML = html;
 
-  lastSnapshot = { name, countNote, total, npmCount, cgrCount, cgrPct, cgrBuilt, builtPct, cgrMirror, mirrorPct, rows, latest };
+  state.npm.lastSnapshot = { name, countNote, total, npmCount, cgrCount, cgrPct, cgrBuilt, builtPct, cgrMirror, mirrorPct, rows, latest };
 }
 
-function tarballCell(url, isCgr = false) {
-  if (!url) return `<span class="cross" title="Not available">✗</span>`;
-  let badge = '';
-  if (isCgr) {
-    if (url.includes('libraries.cgr.dev/javascript-upstream/')) {
-      badge = `<span class="cgr-badge mirror" title="Mirrored from upstream">Secure Mirror</span>`;
-    } else if (url.includes('libraries.cgr.dev/javascript/')) {
-      badge = `<span class="cgr-badge built" title="Built by Chainguard">Built</span>`;
-    }
-  }
-  return `<span class="check-wrap"><a class="check-link" href="${escHtml(url)}" target="_blank" rel="noopener" title="${escHtml(url)}">✓</a>${badge}</span>`;
-}
-
-const dateFmt = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-function formatDate(iso) {
-  const d = new Date(iso);
-  if (isNaN(d)) return '';
-  const days = Math.floor((Date.now() - d) / 86400000);
-  return `${dateFmt.format(d)} (${days}d ago)`;
-}
-
-function cgrTextLabel(url) {
-  if (!url) return '✗';
-  if (url.includes('javascript-upstream')) return '✓ Mirror';
-  if (url.includes('cgr.dev/javascript/')) return '✓ Built';
-  return '✓';
-}
-
-function copyResults() {
-  if (!lastSnapshot) return;
-  const { name, countNote, total, npmCount, cgrCount, cgrPct, cgrBuilt, builtPct, cgrMirror, mirrorPct, rows, latest } = lastSnapshot;
-
-  const lines = [];
-  lines.push(`${name} — ${countNote}`);
-  lines.push(`npmjs.com: ${npmCount}  |  Chainguard: ${cgrPct}% (${cgrCount}/${total})  |  Built: ${builtPct}% (${cgrBuilt}/${cgrCount})  |  Mirrored: ${mirrorPct}% (${cgrMirror}/${cgrCount})`);
-  lines.push('');
-
+function npmCopyResults() {
+  const s = state.npm.lastSnapshot;
+  if (!s) return;
+  const { name, countNote, total, npmCount, cgrCount, cgrPct, cgrBuilt, builtPct, cgrMirror, mirrorPct, rows, latest } = s;
+  const lines = [
+    `${name} — ${countNote}`,
+    `npmjs.com: ${npmCount}  |  Chainguard: ${cgrPct}% (${cgrCount}/${total})  |  Built: ${builtPct}% (${cgrBuilt}/${cgrCount})  |  Mirrored: ${mirrorPct}% (${cgrMirror}/${cgrCount})`,
+    '',
+  ];
   const vw = Math.max(7, ...rows.map(r => r.version.length + (r.version === latest ? 9 : 0))) + 2;
   const dw = Math.max(9, ...rows.map(r => r.published ? formatDate(r.published).length : 0)) + 2;
   lines.push('Version'.padEnd(vw) + 'Published'.padEnd(dw) + 'npmjs.com'.padEnd(12) + 'Chainguard');
   lines.push('─'.repeat(vw + dw + 22));
-
   for (const row of rows) {
-    const v = row.version + (row.version === latest ? ' (latest)' : '');
-    const d = row.published ? formatDate(row.published) : '—';
-    lines.push(v.padEnd(vw) + d.padEnd(dw) + (row.npmTarball ? '✓' : '✗').padEnd(12) + cgrTextLabel(row.cgrTarball));
+    const cgrLabel = !row.cgrTarball ? '✗' : row.cgrTarball.includes('javascript-upstream') ? '✓ Mirror' : '✓ Built';
+    lines.push((row.version + (row.version === latest ? ' (latest)' : '')).padEnd(vw) + (row.published ? formatDate(row.published) : '—').padEnd(dw) + (row.npmTarball ? '✓' : '✗').padEnd(12) + cgrLabel);
   }
-
-  const text = lines.join('\n');
-  const confirm = () => {
-    const btn = document.getElementById('copy-btn');
-    if (!btn) return;
-    btn.textContent = 'Copied!';
-    btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'Copy results'; btn.classList.remove('copied'); }, 2000);
-  };
-
-  if (navigator.clipboard?.writeText) {
-    navigator.clipboard.writeText(text).then(confirm);
-  } else {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.cssText = 'position:fixed;opacity:0';
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    confirm();
-  }
+  copyToClipboard(lines.join('\n'), document.getElementById('npm-copy-btn'));
 }
 
-function escHtml(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-}
+document.getElementById('npm-show-all').addEventListener('change', () => { if (state.npm.lastData) npmRenderTable(state.npm.lastData); });
+document.getElementById('npm-show-prerelease').addEventListener('change', () => { if (state.npm.lastData) npmRenderTable(state.npm.lastData); });
 
-function showLoading(pkg) {
-  document.getElementById('results').innerHTML = `
-    <div id="status">
-      <div class="spinner"></div>
-      Fetching versions for <strong>${escHtml(pkg)}</strong>…
-    </div>`;
-  document.getElementById('banners').innerHTML = '';
-}
-
-// --- Search form ---
-document.getElementById('search-form').addEventListener('submit', async (e) => {
+document.getElementById('npm-form').addEventListener('submit', async (e) => {
   e.preventDefault();
-  const pkg = document.getElementById('pkg-input').value.trim();
+  const pkg = document.getElementById('npm-input').value.trim();
   if (!pkg) return;
-
-  const btn = document.getElementById('fetch-btn');
+  const btn = document.getElementById('npm-btn');
   btn.disabled = true;
-  showLoading(pkg);
-
+  document.getElementById('npm-results').innerHTML = `<div class="status-placeholder"><div class="spinner"></div>Fetching versions for <strong>${escHtml(pkg)}</strong>…</div>`;
+  document.getElementById('npm-banners').innerHTML = '';
   try {
-    const data = await lookupPackage(pkg);
-    lastData = data;
-    renderBanners(data.npmError, data.cgrError, pkg);
-    renderTable(data);
+    const data = await npmLookup(pkg);
+    state.npm.lastData = data;
+    npmRenderBanners(data.npmError, data.cgrError, pkg);
+    npmRenderTable(data);
   } catch (err) {
-    document.getElementById('results').innerHTML = `
-      <div id="status">Unexpected error: ${escHtml(err.message)}</div>`;
+    document.getElementById('npm-results').innerHTML = `<div class="status-placeholder">Unexpected error: ${escHtml(err.message)}</div>`;
   } finally {
     btn.disabled = false;
   }
 });
 
-document.getElementById('pkg-input').addEventListener('keydown', e => {
-  if (e.key === 'Enter') e.target.form.requestSubmit();
+// ── maven tab ─────────────────────────────────────────────────────────────────
+
+function mavenVersionParts(v) {
+  return v.toLowerCase().split(/[\.\-]/).map(p => isNaN(p) ? p : parseInt(p, 10));
+}
+function mavenVersionCompare(a, b) {
+  const ap = mavenVersionParts(a), bp = mavenVersionParts(b);
+  const len = Math.max(ap.length, bp.length);
+  for (let i = 0; i < len; i++) {
+    const av = ap[i] ?? 0, bv = bp[i] ?? 0;
+    if (typeof av === 'number' && typeof bv === 'number') { if (av !== bv) return av - bv; }
+    else { const as = String(av), bs = String(bv); if (as !== bs) return as < bs ? -1 : 1; }
+  }
+  return 0;
+}
+function mavenIsPrerelease(v) {
+  return /[-.]?(alpha|beta|rc|snapshot|milestone|m\d)/i.test(v);
+}
+
+function parseMetadataXml(xml) {
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  if (doc.querySelector('parsererror')) return [];
+  return [...doc.querySelectorAll('versioning > versions > version')].map(el => el.textContent.trim());
+}
+
+async function mavenFetchMetadata(group, artifact) {
+  const res = await fetch(`/api/maven-metadata?${new URLSearchParams({ group, artifact })}`);
+  if (!res.ok) { const e = new Error(`HTTP ${res.status}`); e.status = res.status; throw e; }
+  return res.text();
+}
+
+async function mavenFetchTimestamps(group, artifact, onProgress) {
+  const PAGE = 200;
+  const fetchPage = async (start) => {
+    const res = await fetch(`/api/maven-timestamps?${new URLSearchParams({ group, artifact, start })}`);
+    if (!res.ok) return { response: { docs: [], numFound: 0 } };
+    return res.json();
+  };
+  const first = await fetchPage(0);
+  const total = first.response?.numFound || 0;
+  const docs = [...(first.response?.docs || [])];
+  onProgress?.(docs.length, total);
+  if (total > PAGE) {
+    const pageCount = Math.ceil((total - PAGE) / PAGE);
+    await Promise.all(Array.from({ length: pageCount }, (_, i) =>
+      fetchPage((i + 1) * PAGE).then(data => { docs.push(...(data.response?.docs || [])); onProgress?.(docs.length, total); })
+    ));
+  }
+  const map = {};
+  for (const doc of docs) map[doc.v] = doc.timestamp;
+  return map;
+}
+
+async function mavenFetchCgr(group, artifact, repo) {
+  const { user, pass } = getCreds('maven');
+  const headers = user ? { 'x-cgr-user': user, 'x-cgr-pass': pass } : {};
+  const res = await fetch(`/api/cgr-java?${new URLSearchParams({ group, artifact, repo })}`, { headers });
+  if (!res.ok) { const e = new Error(`HTTP ${res.status}`); e.status = res.status; throw e; }
+  return res.text();
+}
+
+function updateStep(id, s) {
+  const el = document.getElementById(id);
+  if (el) el.querySelector('.step-icon').className = `step-icon ${s}`;
+}
+
+function mavenShowLoading(name) {
+  document.getElementById('maven-results').innerHTML = `
+    <div class="status-placeholder">
+      <div style="font-size:0.9rem;color:#64748b;margin-bottom:1rem">Fetching versions for <strong style="color:#1a1a2e">${escHtml(name)}</strong></div>
+      <div class="fetch-steps">
+        <div class="fetch-step" id="step-maven"><span class="step-icon pending"></span>Maven Central (versions)</div>
+        <div class="fetch-step" id="step-built"><span class="step-icon pending"></span>Chainguard Built</div>
+        <div class="fetch-step" id="step-mirror"><span class="step-icon pending"></span>Chainguard Mirror</div>
+        <div class="fetch-step" id="step-timestamps"><span class="step-icon pending"></span><span id="ts-label">Publish dates</span></div>
+        <div class="fetch-step" id="step-fallback"><span class="step-icon pending"></span><span id="fb-label">Publish dates (recent)</span></div>
+      </div>
+    </div>`;
+  document.getElementById('maven-banners').innerHTML = '';
+}
+
+async function mavenLookup(group, artifact) {
+  const track = (promise, stepId) => promise.then(
+    v => { updateStep(stepId, 'done'); return v; },
+    e => { updateStep(stepId, 'fail'); return Promise.reject(e); }
+  );
+
+  const [mvnMetaRes, cgrBuiltRes, cgrMirrorRes] = await Promise.allSettled([
+    track(mavenFetchMetadata(group, artifact), 'step-maven'),
+    track(mavenFetchCgr(group, artifact, 'java'), 'step-built'),
+    track(mavenFetchCgr(group, artifact, 'java-upstream'), 'step-mirror'),
+  ]);
+
+  const mvnAllVersions = mvnMetaRes.status === 'fulfilled' ? parseMetadataXml(mvnMetaRes.value) : [];
+  const mvnVersionSet  = new Set(mvnAllVersions);
+  const mvnXmlDoc      = mvnMetaRes.status === 'fulfilled'
+    ? new DOMParser().parseFromString(mvnMetaRes.value, 'application/xml') : null;
+  const mvnLatest = mvnXmlDoc?.querySelector('versioning > release')?.textContent?.trim()
+    || mvnXmlDoc?.querySelector('versioning > latest')?.textContent?.trim()
+    || mvnAllVersions.at(-1) || null;
+
+  const cgrBuiltVersions  = cgrBuiltRes.status  === 'fulfilled' ? new Set(parseMetadataXml(cgrBuiltRes.value))  : new Set();
+  const cgrMirrorVersions = cgrMirrorRes.status === 'fulfilled' ? new Set(parseMetadataXml(cgrMirrorRes.value)) : new Set();
+
+  const allVersions = new Set([...mvnAllVersions, ...cgrBuiltVersions, ...cgrMirrorVersions]);
+  const sorted = [...allVersions].sort(mavenVersionCompare).reverse();
+
+  return {
+    name: `${group}:${artifact}`, group, artifact, latest: mvnLatest,
+    rows: sorted.map(v => ({
+      version: v, published: null,
+      inMvn: mvnVersionSet.has(v),
+      cgrType: cgrBuiltVersions.has(v) ? 'built' : cgrMirrorVersions.has(v) ? 'mirror' : null,
+    })),
+    mvnError: mvnMetaRes.status === 'rejected' ? mvnMetaRes.reason : null,
+    cgrBuiltError:  cgrBuiltRes.status  === 'rejected' ? cgrBuiltRes.reason  : null,
+    cgrMirrorError: cgrMirrorRes.status === 'rejected' ? cgrMirrorRes.reason : null,
+  };
+}
+
+function mavenApplyFilters(rows) {
+  let out = rows;
+  if (!document.getElementById('maven-show-prerelease').checked) out = out.filter(r => !mavenIsPrerelease(r.version));
+  if (!document.getElementById('maven-show-all').checked) out = out.slice(0, 50);
+  return out;
+}
+
+function mavenRenderBanners(data) {
+  const { name, mvnError, cgrBuiltError, cgrMirrorError } = data;
+  const container = document.getElementById('maven-banners');
+  container.innerHTML = '';
+  const add = (cls, msg) => { const b = document.createElement('div'); b.className = `banner ${cls}`; b.textContent = msg; container.appendChild(b); };
+  if (mvnError) add(mvnError.status === 404 ? 'warn' : 'error', `Maven Central: ${mvnError.status === 404 ? `"${name}" not found` : mvnError.message}`);
+  if (cgrBuiltError && cgrBuiltError.status !== 404)
+    add(cgrBuiltError.status === 401 ? 'error' : 'warn', cgrBuiltError.status === 401 ? 'libraries.cgr.dev: Unauthorized — check credentials in Settings' : `libraries.cgr.dev (java): ${cgrBuiltError.message}`);
+  if (cgrMirrorError && cgrMirrorError.status !== 404 && (!cgrBuiltError || cgrBuiltError.status === 404))
+    add('warn', `libraries.cgr.dev (java-upstream): ${cgrMirrorError.message}`);
+}
+
+function mavenRenderTable(data) {
+  const { name, group, artifact, latest, rows: allRows } = data;
+  const el = document.getElementById('maven-results');
+  const rows = mavenApplyFilters(allRows);
+
+  if (allRows.length === 0) {
+    el.innerHTML = `<div class="status-placeholder">No versions found for <strong>${escHtml(name)}</strong></div>`;
+    return;
+  }
+
+  const total      = rows.length;
+  const mvnCount   = rows.filter(r => r.inMvn).length;
+  const cgrBuilt   = rows.filter(r => r.cgrType === 'built').length;
+  const cgrMirror  = rows.filter(r => r.cgrType === 'mirror').length;
+  const cgrCount   = cgrBuilt + cgrMirror;
+  const countNote  = total < allRows.length ? `showing ${total} of ${allRows.length}` : `${total} version${total !== 1 ? 's' : ''}`;
+  const { cgrPct, builtPct, mirrorPct, html: statsH } = statsHtml('Maven Central', mvnCount, cgrCount, total, cgrBuilt, cgrMirror);
+  const mvnSearchUrl = `https://search.maven.org/artifact/${encodeURIComponent(group)}/${encodeURIComponent(artifact)}`;
+
+  let html = `
+    <div class="results-header">
+      <div class="results-title">
+        <a class="pkg-name mono" href="${escHtml(mvnSearchUrl)}" target="_blank" rel="noopener">${escHtml(name)}</a>
+        <span class="count">${escHtml(countNote)}</span>
+      </div>
+      <div class="header-right">
+        ${statsH}
+        <button class="copy-btn" id="maven-copy-btn" onclick="mavenCopyResults()">Copy results</button>
+      </div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Version</th><th>Published</th><th style="text-align:center">Maven Central</th><th style="text-align:center">Chainguard</th></tr></thead>
+      <tbody>`;
+
+  for (const row of rows) {
+    const isLatest = row.version === latest;
+    const mvnUrl = row.inMvn ? `https://search.maven.org/artifact/${encodeURIComponent(group)}/${encodeURIComponent(artifact)}/${encodeURIComponent(row.version)}/jar` : null;
+    const cgrUrl = row.cgrType ? `https://libraries.cgr.dev/${row.cgrType === 'built' ? 'java' : 'java-upstream'}/${group.replace(/\./g,'/')}/${artifact}/${row.version}/` : null;
+    html += `<tr${isLatest ? ' class="latest"' : ''}>`;
+    html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}</div></td>`;
+    html += `<td class="date-cell">${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
+    html += `<td class="check-cell">${checkCell(mvnUrl)}</td>`;
+    html += `<td class="check-cell">${cgrCheckCell(row.cgrType, cgrUrl)}</td>`;
+    html += `</tr>`;
+  }
+  html += `</tbody></table></div>`;
+  el.innerHTML = html;
+
+  state.maven.lastSnapshot = { name, countNote, total, mvnCount, cgrCount, cgrPct, cgrBuilt, builtPct, cgrMirror, mirrorPct, rows, latest };
+}
+
+function mavenCopyResults() {
+  const s = state.maven.lastSnapshot;
+  if (!s) return;
+  const { name, countNote, total, mvnCount, cgrCount, cgrPct, cgrBuilt, builtPct, cgrMirror, mirrorPct, rows, latest } = s;
+  const lines = [
+    `${name} — ${countNote}`,
+    `Maven Central: ${mvnCount}  |  Chainguard: ${cgrPct}% (${cgrCount}/${total})  |  Built: ${builtPct}% (${cgrBuilt}/${cgrCount})  |  Mirrored: ${mirrorPct}% (${cgrMirror}/${cgrCount})`,
+    '',
+  ];
+  const vw = Math.max(7, ...rows.map(r => r.version.length + (r.version === latest ? 9 : 0))) + 2;
+  const dw = Math.max(9, ...rows.map(r => r.published ? formatDate(r.published).length : 0)) + 2;
+  lines.push('Version'.padEnd(vw) + 'Published'.padEnd(dw) + 'Maven Central'.padEnd(16) + 'Chainguard');
+  lines.push('─'.repeat(vw + dw + 26));
+  for (const row of rows) {
+    lines.push((row.version + (row.version === latest ? ' (latest)' : '')).padEnd(vw) + (row.published ? formatDate(row.published) : '—').padEnd(dw) + (row.inMvn ? '✓' : '✗').padEnd(16) + (!row.cgrType ? '✗' : row.cgrType === 'built' ? '✓ Built' : '✓ Mirror'));
+  }
+  copyToClipboard(lines.join('\n'), document.getElementById('maven-copy-btn'));
+}
+
+document.getElementById('maven-show-all').addEventListener('change', () => { if (state.maven.lastData) mavenRenderTable(state.maven.lastData); });
+document.getElementById('maven-show-prerelease').addEventListener('change', () => { if (state.maven.lastData) mavenRenderTable(state.maven.lastData); });
+
+document.getElementById('maven-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const raw = document.getElementById('maven-input').value.trim();
+  if (!raw) return;
+  const parts = raw.split(':');
+  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+    document.getElementById('maven-banners').innerHTML = `<div class="banner warn">Enter coordinates as groupId:artifactId — e.g. com.google.guava:guava</div>`;
+    return;
+  }
+  const [group, artifact] = parts.map(s => s.trim());
+  const btn = document.getElementById('maven-btn');
+  btn.disabled = true;
+  mavenShowLoading(`${group}:${artifact}`);
+
+  try {
+    const [data, timestamps] = await Promise.all([
+      mavenLookup(group, artifact),
+      mavenFetchTimestamps(group, artifact, (received, total) => {
+        const label = document.getElementById('ts-label');
+        if (label) label.textContent = `Publish dates (${received} / ${total})`;
+      }).then(ts => { updateStep('step-timestamps', 'done'); return ts; })
+        .catch(() => { updateStep('step-timestamps', 'fail'); return {}; }),
+    ]);
+
+    for (const row of data.rows) {
+      if (timestamps[row.version]) row.published = timestamps[row.version];
+    }
+
+    const missing = data.rows.filter(r => r.inMvn && !r.published).map(r => r.version);
+    if (missing.length > 0) {
+      const fbLabel = document.getElementById('fb-label');
+      if (fbLabel) fbLabel.textContent = `Publish dates (${missing.length} recent)`;
+      try {
+        const res = await fetch('/api/maven-dates', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ group, artifact, versions: missing }),
+        });
+        const fallback = await res.json();
+        for (const row of data.rows) { if (fallback[row.version]) row.published = fallback[row.version]; }
+        updateStep('step-fallback', 'done');
+      } catch { updateStep('step-fallback', 'fail'); }
+    } else {
+      updateStep('step-fallback', 'done');
+    }
+
+    state.maven.lastData = data;
+    mavenRenderBanners(data);
+    mavenRenderTable(data);
+  } catch (err) {
+    document.getElementById('maven-results').innerHTML = `<div class="status-placeholder">Unexpected error: ${escHtml(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+// ── pypi tab ──────────────────────────────────────────────────────────────────
+
+function pypiVersionParts(v) {
+  // PEP 440: epoch!N.N.N[aN|bN|rcN|.devN|.postN]
+  const epoch = v.includes('!') ? parseInt(v.split('!')[0], 10) : 0;
+  const rest = v.includes('!') ? v.split('!')[1] : v;
+  const preMap = { dev: -4, a: -3, alpha: -3, b: -2, beta: -2, rc: -1, c: -1, post: 1 };
+  const m = rest.match(/^([\d.]+)(?:\.(dev|a|alpha|b|beta|rc|c|post)(\d*))?$/i);
+  if (!m) return [epoch, 0, 0, 0, 0, 0];
+  const nums = m[1].split('.').map(n => parseInt(n, 10) || 0);
+  const preType = m[2] ? (preMap[m[2].toLowerCase()] ?? 0) : 0;
+  const preNum  = m[3] ? parseInt(m[3], 10) : 0;
+  return [epoch, ...nums.concat([0,0,0,0]).slice(0,4), preType, preNum];
+}
+
+function pypiVersionCompare(a, b) {
+  const ap = pypiVersionParts(a), bp = pypiVersionParts(b);
+  for (let i = 0; i < Math.max(ap.length, bp.length); i++) {
+    const d = (ap[i] || 0) - (bp[i] || 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+function pypiIsPrerelease(v) {
+  return /\.(dev|a|alpha|b|beta|rc|c)\d*/i.test(v) || /[^.]a\d/i.test(v) || /[^.]b\d/i.test(v) || /rc\d/i.test(v) || /alpha/i.test(v) || /beta/i.test(v);
+}
+
+function parseCgrSimpleIndex(html) {
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  const versionMap = new Map(); // version → { type, url }
+
+  for (const a of doc.querySelectorAll('a[href]')) {
+    const href = a.getAttribute('href') || '';
+    const filename = decodeURIComponent(href.split('/').pop().split('#')[0]);
+    if (!filename) continue;
+
+    let version = null;
+    if (filename.endsWith('.whl')) {
+      // wheel: name-version-pyver-abi-platform.whl — version is always index 1
+      const parts = filename.slice(0, -4).split('-');
+      if (parts.length >= 5) version = parts[1];
+    } else if (filename.match(/\.(tar\.gz|zip)$/)) {
+      // sdist: dist-version.tar.gz — find first part starting with a digit
+      const base = filename.replace(/\.(tar\.gz|zip)$/, '');
+      const parts = base.split('-');
+      const vi = parts.findIndex(p => /^\d/.test(p));
+      if (vi >= 1) version = parts.slice(vi).join('-');
+    }
+    if (!version) continue;
+
+    const type = href.includes('python-upstream') ? 'mirror' : 'built';
+    const url = href.split('#')[0];
+    // Prefer 'built' over 'mirror' if both present for same version
+    if (!versionMap.has(version) || type === 'built') {
+      versionMap.set(version, { type, url });
+    }
+  }
+  return versionMap;
+}
+
+async function pypiLookup(pkg) {
+  const { user, pass } = getCreds('pypi');
+  const pypiUrl = `https://pypi.org/pypi/${encodeURIComponent(pkg)}/json`;
+  const cgrUrl  = `/api/cgr-python/simple/${encodeURIComponent(pkg)}/`;
+  const cgrHeaders = user ? { 'x-cgr-user': user, 'x-cgr-pass': pass } : {};
+
+  const [pypiRes, cgrRes] = await Promise.allSettled([
+    fetch(pypiUrl).then(r => { if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.status = r.status; throw e; } return r.json(); }),
+    fetch(cgrUrl, { headers: cgrHeaders }).then(r => { if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.status = r.status; throw e; } return r.text(); }),
+  ]);
+
+  const pypiData = pypiRes.status === 'fulfilled' ? pypiRes.value : null;
+  const cgrHtml  = cgrRes.status  === 'fulfilled' ? cgrRes.value  : null;
+
+  const pypiReleases = pypiData?.releases || {};
+  const pypiLatest   = pypiData?.info?.version || null;
+  const cgrVersionMap = cgrHtml ? parseCgrSimpleIndex(cgrHtml) : new Map();
+
+  const allVersions = new Set([...Object.keys(pypiReleases), ...cgrVersionMap.keys()]);
+  const sorted = [...allVersions].sort(pypiVersionCompare).reverse();
+
+  return {
+    name: pkg,
+    latest: pypiLatest,
+    rows: sorted.map(v => {
+      const files = pypiReleases[v] || [];
+      const uploadTime = files[0]?.upload_time || null;
+      const vPypiUrl = files.length > 0 ? `https://pypi.org/project/${encodeURIComponent(pkg)}/${encodeURIComponent(v)}/` : null;
+      const cgrInfo = cgrVersionMap.get(v);
+      return { version: v, published: uploadTime, pypiUrl: vPypiUrl, cgrTarball: cgrInfo?.url || null, cgrType: cgrInfo?.type || null };
+    }),
+    pypiError: pypiRes.status === 'rejected' ? pypiRes.reason : null,
+    cgrError:  cgrRes.status  === 'rejected' ? cgrRes.reason  : null,
+  };
+}
+
+function pypiApplyFilters(rows) {
+  let out = rows;
+  if (!document.getElementById('pypi-show-prerelease').checked) out = out.filter(r => !pypiIsPrerelease(r.version));
+  if (!document.getElementById('pypi-show-all').checked) out = out.slice(0, 50);
+  return out;
+}
+
+function pypiRenderBanners(pypiError, cgrError, pkg) {
+  const container = document.getElementById('pypi-banners');
+  container.innerHTML = '';
+  if (pypiError) {
+    const b = document.createElement('div');
+    b.className = `banner ${pypiError.status === 404 ? 'warn' : 'error'}`;
+    b.textContent = pypiError.status === 404 ? `pypi.org: package "${pkg}" not found` : `pypi.org: ${pypiError.message}`;
+    container.appendChild(b);
+  }
+  if (cgrError) {
+    const b = document.createElement('div');
+    b.className = `banner ${cgrError.status === 401 ? 'error' : cgrError.status === 404 ? 'warn' : 'error'}`;
+    b.textContent = cgrError.status === 401
+      ? 'libraries.cgr.dev: Unauthorized — check credentials in Settings'
+      : cgrError.status === 404 ? `libraries.cgr.dev: package "${pkg}" not found (may not be in Chainguard yet)`
+      : `libraries.cgr.dev: ${cgrError.message}`;
+    container.appendChild(b);
+  }
+}
+
+function pypiRenderTable(data) {
+  const { name, latest, rows: allRows } = data;
+  const el = document.getElementById('pypi-results');
+  const rows = pypiApplyFilters(allRows);
+
+  if (allRows.length === 0) {
+    el.innerHTML = `<div class="status-placeholder">No versions found for <strong>${escHtml(name)}</strong></div>`;
+    return;
+  }
+
+  const total     = rows.length;
+  const pypiCount = rows.filter(r => r.pypiUrl).length;
+  const cgrBuilt  = rows.filter(r => r.cgrType === 'built').length;
+  const cgrMirror = rows.filter(r => r.cgrType === 'mirror').length;
+  const cgrCount  = cgrBuilt + cgrMirror;
+  const countNote = total < allRows.length ? `showing ${total} of ${allRows.length}` : `${total} version${total !== 1 ? 's' : ''}`;
+  const { cgrPct, builtPct, mirrorPct, html: statsH } = statsHtml('PyPI', pypiCount, cgrCount, total, cgrBuilt, cgrMirror);
+  const pypiPkgUrl = `https://pypi.org/project/${encodeURIComponent(name)}/#history`;
+
+  let html = `
+    <div class="results-header">
+      <div class="results-title">
+        <a class="pkg-name" href="${escHtml(pypiPkgUrl)}" target="_blank" rel="noopener">${escHtml(name)}</a>
+        <span class="count">${escHtml(countNote)}</span>
+      </div>
+      <div class="header-right">
+        ${statsH}
+        <button class="copy-btn" id="pypi-copy-btn" onclick="pypiCopyResults()">Copy results</button>
+      </div>
+    </div>
+    <div class="table-wrap"><table>
+      <thead><tr><th>Version</th><th>Published</th><th style="text-align:center">PyPI</th><th style="text-align:center">Chainguard</th></tr></thead>
+      <tbody>`;
+
+  for (const row of rows) {
+    const isLatest = row.version === latest;
+    html += `<tr${isLatest ? ' class="latest"' : ''}>`;
+    html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}</div></td>`;
+    html += `<td class="date-cell">${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
+    html += `<td class="check-cell">${checkCell(row.pypiUrl)}</td>`;
+    html += `<td class="check-cell">${cgrCheckCell(row.cgrType, row.cgrTarball)}</td>`;
+    html += `</tr>`;
+  }
+  html += `</tbody></table></div>`;
+  el.innerHTML = html;
+
+  state.pypi.lastSnapshot = { name, countNote, total, pypiCount, cgrCount, cgrPct, cgrBuilt, builtPct, cgrMirror, mirrorPct, rows, latest };
+}
+
+function pypiCopyResults() {
+  const s = state.pypi.lastSnapshot;
+  if (!s) return;
+  const { name, countNote, total, pypiCount, cgrCount, cgrPct, cgrBuilt, builtPct, cgrMirror, mirrorPct, rows, latest } = s;
+  const lines = [
+    `${name} — ${countNote}`,
+    `PyPI: ${pypiCount}  |  Chainguard: ${cgrPct}% (${cgrCount}/${total})  |  Built: ${builtPct}% (${cgrBuilt}/${cgrCount})  |  Mirrored: ${mirrorPct}% (${cgrMirror}/${cgrCount})`,
+    '',
+  ];
+  const vw = Math.max(7, ...rows.map(r => r.version.length + (r.version === latest ? 9 : 0))) + 2;
+  const dw = Math.max(9, ...rows.map(r => r.published ? formatDate(r.published).length : 0)) + 2;
+  lines.push('Version'.padEnd(vw) + 'Published'.padEnd(dw) + 'PyPI'.padEnd(10) + 'Chainguard');
+  lines.push('─'.repeat(vw + dw + 20));
+  for (const row of rows) {
+    lines.push((row.version + (row.version === latest ? ' (latest)' : '')).padEnd(vw) + (row.published ? formatDate(row.published) : '—').padEnd(dw) + (row.pypiUrl ? '✓' : '✗').padEnd(10) + (!row.cgrType ? '✗' : row.cgrType === 'built' ? '✓ Built' : '✓ Mirror'));
+  }
+  copyToClipboard(lines.join('\n'), document.getElementById('pypi-copy-btn'));
+}
+
+document.getElementById('pypi-show-all').addEventListener('change', () => { if (state.pypi.lastData) pypiRenderTable(state.pypi.lastData); });
+document.getElementById('pypi-show-prerelease').addEventListener('change', () => { if (state.pypi.lastData) pypiRenderTable(state.pypi.lastData); });
+
+document.getElementById('pypi-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const pkg = document.getElementById('pypi-input').value.trim();
+  if (!pkg) return;
+  const btn = document.getElementById('pypi-btn');
+  btn.disabled = true;
+  document.getElementById('pypi-results').innerHTML = `<div class="status-placeholder"><div class="spinner"></div>Fetching versions for <strong>${escHtml(pkg)}</strong>…</div>`;
+  document.getElementById('pypi-banners').innerHTML = '';
+  try {
+    const data = await pypiLookup(pkg);
+    state.pypi.lastData = data;
+    pypiRenderBanners(data.pypiError, data.cgrError, pkg);
+    pypiRenderTable(data);
+  } catch (err) {
+    document.getElementById('pypi-results').innerHTML = `<div class="status-placeholder">Unexpected error: ${escHtml(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+  }
 });
 </script>
 </body>

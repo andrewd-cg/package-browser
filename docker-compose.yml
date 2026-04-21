@@ -1,0 +1,5 @@
+services:
+  npm-browser:
+    image: ghcr.io/andrewd-cg/npm-browser:latest
+    ports:
+      - "3000:3000"
