@@ -9,5 +9,5 @@ if [ ! -f "$BUN" ]; then
   exit 1
 fi
 
-echo "Starting npm-browser at http://localhost:3000"
+echo "Starting package-browser at http://localhost:3000"
 "$BUN" server.js
