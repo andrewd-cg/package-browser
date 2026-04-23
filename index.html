@@ -283,6 +283,17 @@
     text-transform: uppercase;
     letter-spacing: 0.04em;
   }
+  .badge-scripts {
+    background: #fef3c7;
+    color: #92400e;
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 99px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: default;
+  }
   .date-cell { font-size: 0.82rem; color: #64748b; white-space: nowrap; }
   .check-cell { text-align: center; }
   .check-link {
@@ -699,6 +710,7 @@ async function npmLookup(pkg) {
       published: npmTime[v] || null,
       npmTarball: npmVersions[v]?.dist?.tarball || null,
       cgrTarball: cgrVersions[v]?.dist?.tarball || null,
+      hasInstallScripts: !!(npmVersions[v]?.scripts && Object.keys(npmVersions[v].scripts).some(k => ['preinstall', 'install', 'postinstall'].includes(k))),
     })),
     npmError: npmRes.status === 'rejected' ? npmRes.reason : null,
     cgrError: cgrRes.status === 'rejected' ? cgrRes.reason : null,
@@ -768,7 +780,7 @@ function npmRenderTable(data) {
   for (const row of rows) {
     const isLatest = row.version === latest;
     html += `<tr${isLatest ? ' class="latest"' : ''}>`;
-    html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}</div></td>`;
+    html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}${row.hasInstallScripts ? '<span class="badge-scripts" title="Has install lifecycle scripts (preinstall/install/postinstall)">scripts</span>' : ''}</div></td>`;
     html += `<td class="date-cell">${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
     html += `<td class="check-cell">${checkCell(row.npmTarball)}</td>`;
     html += `<td class="check-cell">${npmCgrCheckCell(row.cgrTarball)}</td>`;
