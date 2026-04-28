@@ -18,6 +18,79 @@
   [data-active-tab="npm"]   { --accent: #7dd3fc; --accent-glow: rgba(125,211,252,0.15); }
   [data-active-tab="maven"] { --accent: #86efac; --accent-glow: rgba(134,239,172,0.15); }
   [data-active-tab="pypi"]  { --accent: #fde68a; --accent-glow: rgba(253,230,138,0.15); }
+  [data-active-tab="bulk"]  { --accent: #f9a8d4; --accent-glow: rgba(249,168,212,0.15); }
+
+  .bulk-progress {
+    font-size: 0.85rem;
+    color: #64748b;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    margin-bottom: 0.75rem;
+  }
+  .bulk-progress-bar {
+    flex: 1;
+    height: 6px;
+    background: #e2e8f0;
+    border-radius: 99px;
+    overflow: hidden;
+  }
+  .bulk-progress-fill {
+    height: 100%;
+    background: var(--accent, #f9a8d4);
+    border-radius: 99px;
+    transition: width 0.2s;
+  }
+  .bulk-table td.ver-slot {
+    text-align: left;
+    white-space: nowrap;
+    min-width: 160px;
+  }
+  .bulk-table th.ver-slot-th { text-align: left; min-width: 160px; }
+  .bulk-ver-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .bulk-ver-num {
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 0.75rem;
+    color: #64748b;
+  }
+  .bulk-requested {
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 0.78rem;
+    color: #94a3b8;
+  }
+  .bulk-summary-header {
+    padding: 0.9rem 1.25rem;
+    border-bottom: 1px solid #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 1rem;
+    flex-wrap: wrap;
+  }
+  .bulk-drop-zone {
+    position: relative;
+    flex: 1 1 100%;
+  }
+  .bulk-drop-zone.drag-over::after {
+    content: 'Drop file here';
+    position: absolute;
+    inset: 0;
+    background: rgba(249,168,212,0.18);
+    border: 2px dashed #f9a8d4;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1rem;
+    color: #be185d;
+    font-weight: 600;
+    pointer-events: none;
+    z-index: 2;
+  }
 
   /* Header */
   header {
@@ -365,6 +438,7 @@
     <button class="tab-btn active" data-tab="npm">npm</button>
     <button class="tab-btn" data-tab="maven">maven</button>
     <button class="tab-btn" data-tab="pypi">pypi</button>
+    <button class="tab-btn" data-tab="bulk">bulk check</button>
   </nav>
   <button id="settings-btn" title="Settings" aria-label="Settings">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -467,6 +541,44 @@
       <div class="status-placeholder">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
         Enter a package name above to compare versions
+      </div>
+    </div>
+  </div>
+
+  <!-- bulk check tab -->
+  <div id="tab-bulk" class="tab-pane">
+    <form class="search-box" id="bulk-form" style="flex-wrap:wrap; gap:0.5rem;">
+      <div class="bulk-drop-zone" id="bulk-drop-zone">
+        <textarea id="bulk-input" class="pkg-input"
+          placeholder="Paste or drag &amp; drop: package.json, package-lock.json, yarn.lock, requirements.txt, poetry.lock"
+          rows="6"
+          style="resize:vertical; font-family:'SFMono-Regular',Consolas,monospace; font-size:0.82rem; width:100%; box-sizing:border-box; height:auto;"
+          spellcheck="false"
+          autocomplete="off"></textarea>
+      </div>
+      <div style="display:flex; align-items:center; gap:0.75rem; flex:1 1 100%; flex-wrap:wrap;">
+        <label style="font-size:0.85rem; color:#475569; white-space:nowrap;">
+          Latest versions to check:
+          <input type="number" id="bulk-version-count" value="2" min="1" max="5"
+            style="width:56px; border:1px solid #cbd5e1; border-radius:6px; padding:5px 8px; font-size:0.875rem; outline:none; margin-left:0.4rem;">
+        </label>
+        <label style="font-size:0.85rem; color:#475569; white-space:nowrap; display:flex; align-items:center; gap:0.4rem;">
+          Load file:
+          <input type="file" id="bulk-file-input" accept=".json,.txt" style="font-size:0.82rem;">
+        </label>
+        <button type="submit" class="fetch-btn" id="bulk-btn">Check packages</button>
+        <button type="button" class="copy-btn" onclick="bulkClear()">Clear</button>
+      </div>
+    </form>
+    <div class="banners" id="bulk-banners"></div>
+    <div id="bulk-progress-wrap" style="display:none; padding:0 0 0.25rem;" class="bulk-progress">
+      <span id="bulk-progress-text">Checking…</span>
+      <div class="bulk-progress-bar"><div class="bulk-progress-fill" id="bulk-progress-fill" style="width:0%"></div></div>
+    </div>
+    <div class="results" id="bulk-results">
+      <div class="status-placeholder">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+        Paste a package.json or requirements.txt above to check Chainguard coverage
       </div>
     </div>
   </div>
@@ -658,6 +770,7 @@ const state = {
   npm:   { lastData: null, lastSnapshot: null },
   maven: { lastData: null, lastSnapshot: null },
   pypi:  { lastData: null, lastSnapshot: null },
+  bulk:  { lastData: null },
 };
 
 // ── npm tab ───────────────────────────────────────────────────────────────────
@@ -1317,6 +1430,314 @@ document.getElementById('pypi-form').addEventListener('submit', async (e) => {
     document.getElementById('pypi-results').innerHTML = `<div class="status-placeholder">Unexpected error: ${escHtml(err.message)}</div>`;
   } finally {
     btn.disabled = false;
+  }
+});
+
+// ── bulk check tab ────────────────────────────────────────────────────────────
+
+function parsePackageJson(text) {
+  let obj;
+  try { obj = JSON.parse(text); } catch { return null; }
+  const sections = ['dependencies', 'devDependencies', 'peerDependencies', 'optionalDependencies'];
+  const seen = new Map();
+  for (const sec of sections) {
+    if (obj[sec] && typeof obj[sec] === 'object') {
+      for (const [name, ver] of Object.entries(obj[sec])) {
+        if (name && !seen.has(name)) seen.set(name, typeof ver === 'string' ? ver : '');
+      }
+    }
+  }
+  if (seen.size === 0) return null;
+  return { packages: [...seen.entries()].map(([name, requestedVersion]) => ({ name, requestedVersion })), ecosystem: 'npm', format: 'package.json' };
+}
+
+function parseRequirementsTxt(text) {
+  const packages = [];
+  for (let line of text.split('\n')) {
+    line = line.replace(/#.*$/, '').trim();
+    if (!line) continue;
+    if (/^(-r|-e|--)\s/.test(line)) continue;
+    const withoutExtras = line.replace(/\[.*?\]/, '');
+    const verMatch = withoutExtras.match(/\s*([><=!~^].*)$/);
+    const requestedVersion = verMatch ? verMatch[1].trim() : '';
+    const name = withoutExtras.replace(/[\s]*[><=!~^].*$/, '').trim();
+    if (name) packages.push({ name, requestedVersion });
+  }
+  return packages.length ? { packages, ecosystem: 'pypi', format: 'requirements.txt' } : null;
+}
+
+function parsePoetryLock(text) {
+  const packages = [];
+  let name = null, version = null;
+  for (const line of text.split('\n')) {
+    if (line.trim() === '[[package]]') {
+      if (name) packages.push({ name, requestedVersion: version || '' });
+      name = null; version = null;
+    } else {
+      const nameMatch = line.match(/^name\s*=\s*"([^"]+)"/);
+      const verMatch  = line.match(/^version\s*=\s*"([^"]+)"/);
+      if (nameMatch) name = nameMatch[1];
+      if (verMatch)  version = verMatch[1];
+    }
+  }
+  if (name) packages.push({ name, requestedVersion: version || '' });
+  return packages.length ? { packages, ecosystem: 'pypi' } : null;
+}
+
+function parsePackageLockJson(obj) {
+  const seen = new Map();
+  if (obj.lockfileVersion >= 2 && obj.packages) {
+    // v2/v3: keys are "node_modules/foo" or "node_modules/foo/node_modules/bar"
+    for (const [key, entry] of Object.entries(obj.packages)) {
+      if (!key) continue; // skip root ""
+      const segments = key.split('node_modules/');
+      const name = segments[segments.length - 1];
+      if (name && !seen.has(name)) seen.set(name, entry.version || '');
+    }
+  } else if (obj.dependencies) {
+    // v1: flat dependencies object
+    for (const [name, entry] of Object.entries(obj.dependencies)) {
+      if (name && !seen.has(name)) seen.set(name, entry.version || '');
+    }
+  }
+  if (seen.size === 0) return null;
+  return { packages: [...seen.entries()].map(([name, requestedVersion]) => ({ name, requestedVersion })), ecosystem: 'npm', format: 'package-lock.json' };
+}
+
+function parseYarnLock(text) {
+  const seen = new Map();
+  let currentName = null;
+  for (const line of text.split('\n')) {
+    if (line.startsWith('#') || line.trim() === '') continue;
+    // Block header: no leading whitespace, ends with ':'
+    if (!/^\s/.test(line) && line.endsWith(':')) {
+      currentName = null;
+      // First specifier before any comma; strip surrounding quotes
+      const firstSpec = line.split(',')[0].trim().replace(/:$/, '').replace(/^"|"$/g, '');
+      // Find the @ that separates name from version range
+      // Scoped packages start with @, so find the second @ for those
+      const atIdx = firstSpec.startsWith('@') ? firstSpec.indexOf('@', 1) : firstSpec.indexOf('@');
+      if (atIdx > 0) {
+        let name = firstSpec.slice(0, atIdx);
+        // yarn berry uses "react@npm:^18" — name is already clean before the @
+        currentName = name || null;
+      }
+    }
+    if (currentName && !seen.has(currentName)) {
+      const v1    = line.match(/^\s+version\s+"([^"]+)"/);   // yarn classic
+      const berry = line.match(/^\s+version:\s+(\S+)/);       // yarn berry
+      const ver = (v1 && v1[1]) || (berry && berry[1]) || null;
+      if (ver) seen.set(currentName, ver);
+    }
+  }
+  return seen.size ? { packages: [...seen.entries()].map(([name, requestedVersion]) => ({ name, requestedVersion })), ecosystem: 'npm', format: 'yarn.lock' } : null;
+}
+
+function bulkDetectAndParse(text) {
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{')) {
+    let obj;
+    try { obj = JSON.parse(trimmed); } catch { return null; }
+    if (obj.lockfileVersion) return parsePackageLockJson(obj);
+    return parsePackageJson(trimmed);
+  }
+  if (trimmed.includes('[[package]]')) return parsePoetryLock(trimmed);
+  if (trimmed.includes('# yarn lockfile') || trimmed.startsWith('__metadata:')) return parseYarnLock(trimmed);
+  return parseRequirementsTxt(trimmed);
+}
+
+async function runWithConcurrency(items, limit, fn) {
+  const results = new Array(items.length);
+  let nextIdx = 0;
+  async function worker() {
+    while (nextIdx < items.length) {
+      const idx = nextIdx++;
+      results[idx] = await fn(items[idx], idx);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
+async function bulkRun(packages, ecosystem, versionCount, onProgress) {
+  const lookup = ecosystem === 'npm' ? npmLookup : pypiLookup;
+  let done = 0;
+  return runWithConcurrency(packages, 5, async ({ name, requestedVersion }) => {
+    try {
+      const data = await lookup(name);
+      done++;
+      onProgress(done, packages.length);
+      const stableRows = ecosystem === 'npm'
+        ? data.rows.filter(r => !r.version.includes('-'))
+        : data.rows.filter(r => !pypiIsPrerelease(r.version));
+      return { pkg: name, requestedVersion, slots: stableRows.slice(0, versionCount), error: null, ecosystem };
+    } catch (err) {
+      done++;
+      onProgress(done, packages.length);
+      return { pkg: name, requestedVersion, slots: [], error: err.message, ecosystem };
+    }
+  });
+}
+
+function bulkHasCgr(row, eco) {
+  return eco === 'npm' ? !!row.cgrTarball : !!row.cgrType;
+}
+
+function bulkRenderTable(results, versionCount, ecosystem) {
+  const el = document.getElementById('bulk-results');
+  if (!results.length) {
+    el.innerHTML = `<div class="status-placeholder">No packages found.</div>`;
+    return;
+  }
+
+  const total = results.length;
+  const withLatest = results.filter(r => r.slots.length > 0 && bulkHasCgr(r.slots[0], ecosystem)).length;
+  const withAny    = results.filter(r => r.slots.some(s => bulkHasCgr(s, ecosystem))).length;
+  const latestPct  = total ? Math.round(withLatest / total * 100) : 0;
+  const anyPct     = total ? Math.round(withAny / total * 100) : 0;
+
+  const slotLabels = Array.from({ length: versionCount }, (_, i) => i === 0 ? 'Latest' : `N-${i}`);
+
+  let latestBuilt = 0, latestMirror = 0, builtPct = 0, mirrorPct = 0;
+  if (ecosystem === 'npm') {
+    latestBuilt  = results.filter(r => r.slots.length > 0 && r.slots[0].cgrTarball && !r.slots[0].cgrTarball.includes('javascript-upstream')).length;
+    latestMirror = results.filter(r => r.slots.length > 0 && r.slots[0].cgrTarball &&  r.slots[0].cgrTarball.includes('javascript-upstream')).length;
+    builtPct  = withLatest ? Math.round(latestBuilt  / withLatest * 100) : 0;
+    mirrorPct = withLatest ? Math.round(latestMirror / withLatest * 100) : 0;
+  }
+
+  let html = `<div class="bulk-summary-header">`;
+  html += `<div class="results-title"><span class="pkg-name">${escHtml(ecosystem === 'npm' ? 'npm' : 'pypi')}</span><span class="count">${total} package${total !== 1 ? 's' : ''}</span></div>`;
+  html += `<div class="header-right"><div class="stats-row">`;
+  html += `<div class="stat-block"><span class="stat-label">Packages</span><span class="stat-value">${total}</span></div>`;
+  html += `<div class="stat-divider"></div>`;
+  html += `<div class="stat-block"><span class="stat-label">Latest in CGR</span><span class="stat-value">${withLatest} <span class="stat-pct">${latestPct}%</span></span></div>`;
+  if (ecosystem === 'npm') {
+    html += `<div class="stat-block stat-sub"><span class="stat-label">Built</span><span class="stat-value">${latestBuilt} <span class="stat-pct built">${builtPct}%</span></span></div>`;
+    html += `<div class="stat-block stat-sub"><span class="stat-label">Mirrored</span><span class="stat-value">${latestMirror} <span class="stat-pct mirror">${mirrorPct}%</span></span></div>`;
+  }
+  if (versionCount > 1) {
+    html += `<div class="stat-divider"></div>`;
+    html += `<div class="stat-block"><span class="stat-label">N-1 or later in CGR</span><span class="stat-value">${withAny} <span class="stat-pct">${anyPct}%</span></span></div>`;
+  }
+  html += `</div></div></div>`;
+
+  html += `<div class="table-wrap"><table class="bulk-table">`;
+  html += `<thead><tr><th>Package</th><th style="color:#94a3b8;font-weight:500">Requested</th>`;
+  for (const label of slotLabels) html += `<th class="ver-slot-th" style="text-align:left">${escHtml(label)}</th>`;
+  html += `</tr></thead><tbody>`;
+
+  for (const { pkg, requestedVersion, slots, error, ecosystem: eco } of results) {
+    const pkgTab = eco === 'npm' ? 'npm' : 'pypi';
+    html += `<tr>`;
+    html += `<td><a href="#" class="pkg-name" style="font-family:'SFMono-Regular',Consolas,monospace;font-size:0.85rem;" onclick="event.preventDefault();bulkDrillDown('${escHtml(pkg)}','${escHtml(pkgTab)}')">${escHtml(pkg)}</a></td>`;
+    html += `<td><span class="bulk-requested">${requestedVersion ? escHtml(requestedVersion) : '<span style="color:#e2e8f0">—</span>'}</span></td>`;
+    if (error) {
+      html += `<td class="ver-slot" colspan="${versionCount}" style="color:#f87171;font-size:0.82rem;">Error: ${escHtml(error)}</td>`;
+    } else {
+      for (let i = 0; i < versionCount; i++) {
+        const slot = slots[i];
+        html += `<td class="ver-slot">`;
+        if (!slot) {
+          html += `<span class="cross" title="No version at this slot">—</span>`;
+        } else {
+          html += `<span class="bulk-ver-cell"><span class="bulk-ver-num">${escHtml(slot.version)}</span>`;
+          html += eco === 'npm' ? npmCgrCheckCell(slot.cgrTarball) : cgrCheckCell(slot.cgrType, slot.cgrTarball);
+          html += `</span>`;
+        }
+        html += `</td>`;
+      }
+    }
+    html += `</tr>`;
+  }
+
+  html += `</tbody></table></div>`;
+  el.innerHTML = html;
+  state.bulk.lastData = { results, versionCount, ecosystem };
+}
+
+function bulkClear() {
+  document.getElementById('bulk-input').value = '';
+  document.getElementById('bulk-file-input').value = '';
+  document.getElementById('bulk-banners').innerHTML = '';
+  document.getElementById('bulk-results').innerHTML = `<div class="status-placeholder">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+    Paste a package.json or requirements.txt above to check Chainguard coverage
+  </div>`;
+  state.bulk.lastData = null;
+}
+
+function bulkDrillDown(pkg, tab) {
+  const btn = document.querySelector(`.tab-btn[data-tab="${tab}"]`);
+  if (btn) btn.click();
+  const input = document.getElementById(`${tab}-input`);
+  if (input) {
+    input.value = pkg;
+    input.focus();
+  }
+}
+
+function bulkLoadFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => { document.getElementById('bulk-input').value = ev.target.result; };
+  reader.readAsText(file);
+}
+
+document.getElementById('bulk-file-input').addEventListener('change', (e) => bulkLoadFile(e.target.files[0]));
+
+const dropZone = document.getElementById('bulk-drop-zone');
+dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', (e) => { if (!dropZone.contains(e.relatedTarget)) dropZone.classList.remove('drag-over'); });
+dropZone.addEventListener('drop', (e) => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  bulkLoadFile(e.dataTransfer.files[0]);
+});
+
+document.getElementById('bulk-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = document.getElementById('bulk-input').value.trim();
+  if (!text) return;
+
+  const parsed = bulkDetectAndParse(text);
+  if (!parsed) {
+    document.getElementById('bulk-banners').innerHTML =
+      `<div class="banner warn">Could not detect package.json or requirements.txt format.</div>`;
+    return;
+  }
+
+  const versionCount = Math.max(1, Math.min(5, parseInt(document.getElementById('bulk-version-count').value, 10) || 2));
+  const { packages, ecosystem, format } = parsed;
+  const btn = document.getElementById('bulk-btn');
+  btn.disabled = true;
+
+  const noPins = format === 'requirements.txt' && packages.every(p => !p.requestedVersion.includes('=='));
+  document.getElementById('bulk-banners').innerHTML = noPins
+    ? `<div class="banner warn">This looks like a hand-written requirements.txt without pinned versions — it may only show direct dependencies, not the full transitive tree. For complete coverage, run <code style="font-family:monospace;background:#fef3c7;padding:1px 4px;border-radius:3px">uv pip compile requirements.txt</code> first and upload the output.</div>`
+    : '';
+  document.getElementById('bulk-results').innerHTML =
+    `<div class="status-placeholder"><div class="spinner"></div>Preparing to check ${packages.length} package${packages.length !== 1 ? 's' : ''}…</div>`;
+
+  const progressWrap = document.getElementById('bulk-progress-wrap');
+  const progressText = document.getElementById('bulk-progress-text');
+  const progressFill = document.getElementById('bulk-progress-fill');
+  progressWrap.style.display = 'flex';
+  progressFill.style.width = '0%';
+  progressText.textContent = `Checking 0 of ${packages.length} packages (${ecosystem})…`;
+
+  try {
+    const results = await bulkRun(packages, ecosystem, versionCount, (done, total) => {
+      progressFill.style.width = `${Math.round(done / total * 100)}%`;
+      progressText.textContent = `Checking ${done} of ${total} packages (${ecosystem})…`;
+    });
+    bulkRenderTable(results, versionCount, ecosystem);
+  } catch (err) {
+    document.getElementById('bulk-results').innerHTML =
+      `<div class="status-placeholder">Unexpected error: ${escHtml(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    progressWrap.style.display = 'none';
   }
 });
 </script>
