@@ -367,6 +367,28 @@
     letter-spacing: 0.04em;
     cursor: default;
   }
+  .badge-prov {
+    background: #dcfce7;
+    color: #15803d;
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 99px;
+    letter-spacing: 0.04em;
+    text-decoration: none;
+    white-space: nowrap;
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    display: block;
+  }
+  .badge-prov:hover { background: #bbf7d0; }
+  .badge-prov.no-link { cursor: default; }
+  .badge-signed { background: #16a34a; color: #fff; cursor: default; text-decoration: none; }
+  a.badge-signed { cursor: pointer; }
+  .badge-signed:hover { background: #15803d; }
+  .badge-stack { display: inline-flex; flex-direction: column; align-items: center; gap: 2px; }
+  .check-and-prov { display: inline-flex; align-items: center; gap: 0.3rem; flex-wrap: wrap; justify-content: center; }
+  .check-cell-left { text-align: left; }
+  .check-cell-left .check-and-prov { display: flex; justify-content: flex-start; }
   .date-cell { font-size: 0.82rem; color: #64748b; white-space: nowrap; }
   .check-cell { text-align: center; }
   .check-link {
@@ -497,6 +519,7 @@
     <div class="filter-row">
       <label class="filter-label"><input type="checkbox" id="npm-show-all"> Show all versions</label>
       <label class="filter-label"><input type="checkbox" id="npm-show-prerelease"> Show pre-release (alpha / beta / canary / rc)</label>
+      <label class="filter-label"><input type="checkbox" id="npm-show-provenance"> Show provenance &amp; signed badges</label>
     </div>
     <div class="banners" id="npm-banners"></div>
     <div class="results" id="npm-results">
@@ -635,13 +658,17 @@ function cgrCheckCell(type, url) {
 
 function npmCgrCheckCell(tarball) {
   if (!tarball) return `<span class="cross" title="Not available">✗</span>`;
-  let badge = '';
+  return `<a class="check-link" href="${escHtml(tarball)}" target="_blank" rel="noopener" title="${escHtml(tarball)}">✓</a>`;
+}
+
+function npmCgrBadge(tarball) {
+  if (!tarball) return '';
   if (tarball.includes('libraries.cgr.dev/javascript-upstream/')) {
-    badge = `<span class="cgr-badge mirror" title="Mirrored from upstream">Secure Mirror</span>`;
+    return `<span class="cgr-badge mirror" title="Mirrored from upstream">Secure Mirror</span>`;
   } else if (tarball.includes('libraries.cgr.dev/javascript/')) {
-    badge = `<span class="cgr-badge built" title="Built by Chainguard">Built</span>`;
+    return `<span class="cgr-badge built" title="Built by Chainguard">Built</span>`;
   }
-  return `<span class="check-wrap"><a class="check-link" href="${escHtml(tarball)}" target="_blank" rel="noopener" title="${escHtml(tarball)}">✓</a>${badge}</span>`;
+  return '';
 }
 
 function statsHtml(registry1Label, r1Count, cgrCount, total, cgrBuilt, cgrMirror) {
@@ -887,20 +914,24 @@ function npmRenderTable(data) {
       </div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Version</th><th>Published</th><th style="text-align:center">npmjs.com</th><th style="text-align:center">Chainguard</th></tr></thead>
+      <thead><tr><th>Version</th><th>Published</th><th style="text-align:left">npmjs.com</th><th style="text-align:left">Chainguard</th></tr></thead>
       <tbody>`;
 
-  for (const row of rows) {
+  for (const [idx, row] of rows.entries()) {
     const isLatest = row.version === latest;
     html += `<tr${isLatest ? ' class="latest"' : ''}>`;
     html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}${row.hasInstallScripts ? '<span class="badge-scripts" title="Has install lifecycle scripts (preinstall/install/postinstall)">scripts</span>' : ''}</div></td>`;
     html += `<td class="date-cell">${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
-    html += `<td class="check-cell">${checkCell(row.npmTarball)}</td>`;
-    html += `<td class="check-cell">${npmCgrCheckCell(row.cgrTarball)}</td>`;
+    html += `<td class="check-cell check-cell-left"><div class="check-and-prov">${checkCell(row.npmTarball)}<span id="npm-att-${idx}"></span></div></td>`;
+    html += `<td class="check-cell check-cell-left"><div class="check-and-prov">${npmCgrCheckCell(row.cgrTarball)}<span id="cgr-att-${idx}"></span>${npmCgrBadge(row.cgrTarball)}</div></td>`;
     html += `</tr>`;
   }
   html += `</tbody></table></div>`;
   el.innerHTML = html;
+
+  if (document.getElementById('npm-show-provenance').checked) {
+    npmEnrichWithAttestations(name, rows);
+  }
 
   state.npm.lastSnapshot = { name, countNote, total, npmCount, cgrCount, cgrPct, cgrBuilt, builtPct, cgrMirror, mirrorPct, rows, latest };
 }
@@ -927,6 +958,69 @@ function npmCopyResults() {
 
 document.getElementById('npm-show-all').addEventListener('change', () => { if (state.npm.lastData) npmRenderTable(state.npm.lastData); });
 document.getElementById('npm-show-prerelease').addEventListener('change', () => { if (state.npm.lastData) npmRenderTable(state.npm.lastData); });
+document.getElementById('npm-show-provenance').addEventListener('change', e => {
+  if (!e.target.checked) {
+    document.querySelectorAll('[id^="npm-att-"],[id^="cgr-att-"]').forEach(el => el.innerHTML = '');
+    return;
+  }
+  const s = state.npm.lastSnapshot;
+  if (s) npmEnrichWithAttestations(s.name, s.rows);
+});
+
+function identityToUrl(identity) {
+  // OIDC subject claims look like: https://github.com/owner/repo/.github/workflows/file.yml@refs/heads/main
+  // Convert to a browseable GitHub blob URL. Returns null for non-GitHub issuers (e.g. issuer.enforce.dev).
+  const m = identity.match(/^(https:\/\/github\.com\/[^/]+\/[^/]+)\/(.+?)@refs\/(heads|tags)\/(.+)$/);
+  if (m) return `${m[1]}/blob/${m[4]}/${m[2]}`;
+  return null;
+}
+
+function provBadgeHtml(result) {
+  if (!result?.hasAttestation) return '';
+  let parts = '';
+
+  if (result.commitUrl) {
+    const tip = `SLSA provenance — source commit${result.shortSha ? ` ${result.shortSha}` : ''}`;
+    const label = result.shortSha ? `Source ${result.shortSha}` : 'Source';
+    parts += `<a class="badge-prov" href="${escHtml(result.commitUrl)}" target="_blank" rel="noopener" title="${escHtml(tip)}">${label}</a>`;
+  } else {
+    parts += `<span class="badge-prov no-link" title="SLSA attestation present (no source link)">Source</span>`;
+  }
+
+  if (result.verified) {
+    const tip = `Signed by a trusted entity (Sigstore/Fulcio)${result.identity ? `\n${result.identity}` : ''}`;
+    const signedUrl = result.tlogIndex
+      ? `https://search.sigstore.dev/?logIndex=${result.tlogIndex}`
+      : (result.identity ? identityToUrl(result.identity) : null);
+    if (signedUrl) {
+      parts += `<a class="badge-prov badge-signed" href="${escHtml(signedUrl)}" target="_blank" rel="noopener" title="${escHtml(tip)}">signed</a>`;
+    } else {
+      parts += `<span class="badge-prov badge-signed" title="${escHtml(tip)}">signed</span>`;
+    }
+  }
+
+  return `<span class="badge-stack">${parts}</span>`;
+}
+
+async function npmEnrichWithAttestations(name, rows) {
+  const { user, pass } = getCreds('npm');
+  const cgrHeaders = user ? { 'x-cgr-user': user, 'x-cgr-pass': pass } : {};
+  await runWithConcurrency(rows.map((row, idx) => ({ row, idx })), 5, async ({ row, idx }) => {
+    const params = new URLSearchParams({ pkg: name, version: row.version });
+    let result;
+    try {
+      result = await fetch(`/api/verify-attestation?${params}`, { headers: cgrHeaders }).then(r => r.ok ? r.json() : null);
+    } catch { result = null; }
+    if (!result) return;
+    // For CGR: use CGR's own attestation if it has one, otherwise inherit npm's
+    // attestation if the tarball is mirrored (same content, upstream sig still valid)
+    const cgrResult = result.cgr?.hasAttestation ? result.cgr : (row.cgrTarball ? result.npm : null);
+    const npmSlot = document.getElementById(`npm-att-${idx}`);
+    const cgrSlot = document.getElementById(`cgr-att-${idx}`);
+    if (npmSlot) npmSlot.innerHTML = provBadgeHtml(result.npm);
+    if (cgrSlot) cgrSlot.innerHTML = provBadgeHtml(cgrResult);
+  });
+}
 
 document.getElementById('npm-form').addEventListener('submit', async (e) => {
   e.preventDefault();
