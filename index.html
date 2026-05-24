@@ -658,7 +658,7 @@ function cgrCheckCell(type, url) {
 
 function npmCgrCheckCell(tarball) {
   if (!tarball) return `<span class="cross" title="Not available">✗</span>`;
-  return `<a class="check-link" href="${escHtml(tarball)}" target="_blank" rel="noopener" title="${escHtml(tarball)}">✓</a>`;
+  return `<a class="check-link cgr-dl" data-eco="npm" href="${escHtml(tarball)}" title="Download ${escHtml(tarball)}">✓</a>`;
 }
 
 function npmCgrBadge(tarball) {
@@ -719,6 +719,36 @@ for (const [eco, keys] of Object.entries(CREDS)) {
   document.getElementById(`${eco}-cgr-user`).value = localStorage.getItem(keys.user) || '';
   document.getElementById(`${eco}-cgr-pass`).value = localStorage.getItem(keys.pass) || '';
 }
+
+// Intercept CGR download links — fetch via authenticated proxy and trigger a browser download
+document.addEventListener('click', async e => {
+  const a = e.target.closest('a.cgr-dl');
+  if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  const eco = a.dataset.eco;
+  const upstream = a.getAttribute('href');
+  const path = upstream.replace(/^https:\/\/libraries\.cgr\.dev\//, '');
+  const filename = path.split('/').pop() || 'download';
+  const { user, pass } = getCreds(eco);
+  const orig = a.textContent;
+  a.textContent = '…';
+  try {
+    const res = await fetch(`/api/cgr-download/${path}`, {
+      headers: user ? { 'x-cgr-user': user, 'x-cgr-pass': pass } : {},
+    });
+    if (!res.ok) { alert(`Download failed (${res.status})`); return; }
+    const blob = await res.blob();
+    const blobUrl = URL.createObjectURL(blob);
+    const dl = document.createElement('a');
+    dl.href = blobUrl; dl.download = filename;
+    document.body.appendChild(dl); dl.click(); document.body.removeChild(dl);
+    URL.revokeObjectURL(blobUrl);
+  } catch (err) {
+    alert(`Download error: ${err.message}`);
+  } finally {
+    a.textContent = orig;
+  }
+});
 
 const settingsBtn = document.getElementById('settings-btn');
 const settingsPanel = document.getElementById('settings-panel');

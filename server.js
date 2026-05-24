@@ -28,6 +28,28 @@ Bun.serve({
       }
     }
 
+    // CGR authenticated download proxy (streams tarball back as attachment)
+    if (url.pathname.startsWith('/api/cgr-download/')) {
+      const path = url.pathname.slice('/api/cgr-download/'.length);
+      const user = req.headers.get('x-cgr-user') || '';
+      const pass = req.headers.get('x-cgr-pass') || '';
+      const upstream = `https://libraries.cgr.dev/${path}`;
+      const headers = user ? { 'Authorization': 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64') } : {};
+      try {
+        const res = await fetch(upstream, { headers });
+        const filename = path.split('/').pop() || 'download';
+        const respHeaders = {
+          'Content-Type': res.headers.get('content-type') || 'application/octet-stream',
+          'Content-Disposition': `attachment; filename="${filename}"`,
+        };
+        const len = res.headers.get('content-length');
+        if (len) respHeaders['Content-Length'] = len;
+        return new Response(res.body, { status: res.status, headers: respHeaders });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 502, headers: { 'Content-Type': 'application/json' } });
+      }
+    }
+
     // CGR npm attestations proxy
     if (url.pathname.startsWith('/api/cgr-attestations/')) {
       const path = url.pathname.slice('/api/cgr-attestations/'.length);
