@@ -137,9 +137,22 @@
     align-items: center;
     transition: background 0.15s, color 0.15s;
     flex-shrink: 0;
+    position: relative;
   }
   #settings-btn:hover { background: rgba(255,255,255,0.1); color: #fff; }
   #settings-btn.active { color: var(--accent); }
+  #settings-btn.has-errors::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: #dc2626;
+    border: 2px solid #1a1a2e;
+    box-sizing: content-box;
+  }
 
   /* Settings panel */
   #settings-panel {
@@ -190,6 +203,13 @@
   }
   .save-btn:hover { background: #2d2d50; }
   .save-btn:disabled { background: #94a3b8; cursor: default; }
+  .save-btn.test-btn {
+    background: transparent;
+    color: #1a1a2e;
+    border: 1px solid #cbd5e1;
+  }
+  .save-btn.test-btn:hover { background: #f1f5f9; }
+  .save-btn.test-btn:disabled { color: #94a3b8; border-color: #e2e8f0; background: transparent; }
   .save-status {
     font-size: 0.78rem;
     font-weight: 500;
@@ -209,6 +229,7 @@
     user-select: all;
     white-space: nowrap;
   }
+  .cred-copy-btn { padding: 3px 8px; font-size: 0.72rem; }
 
   /* Main content */
   main { max-width: 960px; margin: 2rem auto; padding: 0 1.5rem; }
@@ -479,8 +500,10 @@
       <label for="npm-cgr-pass" style="margin-left:0.5rem">Password / Token</label>
       <input type="password" id="npm-cgr-pass" placeholder="••••••••" autocomplete="current-password">
       <button class="save-btn" id="npm-save-btn" onclick="saveCreds('npm')">Save</button>
+      <button class="save-btn test-btn" id="npm-test-btn" onclick="testCredsUI('npm')">Test</button>
       <span class="save-status" id="npm-save-status"></span>
-      <code class="cred-hint">chainctl auth pull-token --repository=javascript --parent=&lt;ORG_NAME&gt;</code>
+      <code class="cred-hint">chainctl auth pull-token --repository=javascript --parent=&lt;ORG_NAME&gt; --ttl=8760h</code>
+      <button type="button" class="copy-btn cred-copy-btn" onclick="copyCredHint(this)">Copy</button>
     </div>
   </div>
   <div class="settings-section">
@@ -491,8 +514,10 @@
       <label for="maven-cgr-pass" style="margin-left:0.5rem">Password / Token</label>
       <input type="password" id="maven-cgr-pass" placeholder="••••••••" autocomplete="current-password">
       <button class="save-btn" id="maven-save-btn" onclick="saveCreds('maven')">Save</button>
+      <button class="save-btn test-btn" id="maven-test-btn" onclick="testCredsUI('maven')">Test</button>
       <span class="save-status" id="maven-save-status"></span>
-      <code class="cred-hint">chainctl auth pull-token --repository=java --parent=&lt;ORG_NAME&gt;</code>
+      <code class="cred-hint">chainctl auth pull-token --repository=java --parent=&lt;ORG_NAME&gt; --ttl=8760h</code>
+      <button type="button" class="copy-btn cred-copy-btn" onclick="copyCredHint(this)">Copy</button>
     </div>
   </div>
   <div class="settings-section">
@@ -503,8 +528,10 @@
       <label for="pypi-cgr-pass" style="margin-left:0.5rem">Password / Token</label>
       <input type="password" id="pypi-cgr-pass" placeholder="••••••••" autocomplete="current-password">
       <button class="save-btn" id="pypi-save-btn" onclick="saveCreds('pypi')">Save</button>
+      <button class="save-btn test-btn" id="pypi-test-btn" onclick="testCredsUI('pypi')">Test</button>
       <span class="save-status" id="pypi-save-status"></span>
-      <code class="cred-hint">chainctl auth pull-token --repository=python --parent=&lt;ORG_NAME&gt;</code>
+      <code class="cred-hint">chainctl auth pull-token --repository=python --parent=&lt;ORG_NAME&gt; --ttl=8760h</code>
+      <button type="button" class="copy-btn cred-copy-btn" onclick="copyCredHint(this)">Copy</button>
     </div>
   </div>
 </div>
@@ -623,11 +650,12 @@ function formatDate(ts) {
 }
 
 function copyToClipboard(text, btn) {
+  const original = btn?.textContent ?? 'Copy results';
   const confirm = () => {
     if (!btn) return;
     btn.textContent = 'Copied!';
     btn.classList.add('copied');
-    setTimeout(() => { btn.textContent = 'Copy results'; btn.classList.remove('copied'); }, 2000);
+    setTimeout(() => { btn.textContent = original; btn.classList.remove('copied'); }, 2000);
   };
   if (navigator.clipboard?.writeText) {
     navigator.clipboard.writeText(text).then(confirm);
@@ -641,6 +669,11 @@ function copyToClipboard(text, btn) {
     document.body.removeChild(ta);
     confirm();
   }
+}
+
+function copyCredHint(btn) {
+  const code = btn.previousElementSibling;
+  if (code?.tagName === 'CODE') copyToClipboard(code.textContent, btn);
 }
 
 function checkCell(url) {
@@ -763,48 +796,106 @@ const TEST_ENDPOINTS = {
   pypi:  () => '/api/cgr-python/simple/requests/',
 };
 
-async function saveCreds(eco) {
-  const userEl   = document.getElementById(`${eco}-cgr-user`);
-  const passEl   = document.getElementById(`${eco}-cgr-pass`);
-  const statusEl = document.getElementById(`${eco}-save-status`);
-  const btnEl    = document.getElementById(`${eco}-save-btn`);
+const credStatus = { npm: null, maven: null, pypi: null };
 
+function setStatus(eco, kind, text) {
+  const el = document.getElementById(`${eco}-save-status`);
+  el.className = `save-status ${kind}`;
+  el.textContent = text;
+}
+
+function clearStatus(eco) {
+  const el = document.getElementById(`${eco}-save-status`);
+  el.className = 'save-status';
+  el.textContent = '';
+}
+
+function updateSettingsBadge() {
+  const anyError = Object.values(credStatus).some(v => v === false);
+  document.getElementById('settings-btn').classList.toggle('has-errors', anyError);
+}
+
+async function testCreds(eco, user, pass) {
+  if (!user) return { ok: null, message: '' };
+  try {
+    const res = await fetch(TEST_ENDPOINTS[eco](), {
+      headers: { 'x-cgr-user': user, 'x-cgr-pass': pass },
+    });
+    if (res.status === 401) return { ok: false, message: '✗ Invalid credentials (401)' };
+    if (res.status === 403) return { ok: false, message: '✗ Access denied (403)' };
+    if (res.status >= 500) {
+      const body = await res.text().catch(() => '');
+      if (/failed to exchange token/i.test(body)) {
+        return { ok: false, message: '✗ Token expired — regenerate' };
+      }
+      return { ok: false, message: `✗ Upstream error (${res.status})` };
+    }
+    if (res.status === 404) return { ok: true, message: '✓ Auth OK (test pkg not in catalog)' };
+    if (!res.ok) return { ok: false, message: `✗ HTTP ${res.status}` };
+    return { ok: true, message: '✓ Credentials valid' };
+  } catch (err) {
+    return { ok: false, message: `✗ ${err.message}` };
+  }
+}
+
+async function runTest(eco, user, pass, { autoClear = false } = {}) {
+  const saveBtn = document.getElementById(`${eco}-save-btn`);
+  const testBtn = document.getElementById(`${eco}-test-btn`);
+  saveBtn.disabled = true;
+  testBtn.disabled = true;
+  setStatus(eco, 'busy', 'Testing credentials…');
+  try {
+    const result = await testCreds(eco, user, pass);
+    credStatus[eco] = result.ok;
+    if (result.ok === null) {
+      clearStatus(eco);
+    } else {
+      setStatus(eco, result.ok ? 'ok' : 'error', result.message);
+      if (result.ok && autoClear) {
+        setTimeout(() => { if (credStatus[eco] === true) clearStatus(eco); }, 3000);
+      }
+    }
+  } finally {
+    saveBtn.disabled = false;
+    testBtn.disabled = false;
+    updateSettingsBadge();
+  }
+}
+
+async function saveCreds(eco) {
+  const userEl = document.getElementById(`${eco}-cgr-user`);
+  const passEl = document.getElementById(`${eco}-cgr-pass`);
   localStorage.setItem(CREDS[eco].user, userEl.value);
   localStorage.setItem(CREDS[eco].pass, passEl.value);
 
   if (!userEl.value) {
-    statusEl.className = 'save-status ok';
-    statusEl.textContent = 'Cleared';
-    setTimeout(() => { statusEl.textContent = ''; statusEl.className = 'save-status'; }, 2000);
+    credStatus[eco] = null;
+    setStatus(eco, 'ok', 'Cleared');
+    setTimeout(() => clearStatus(eco), 2000);
+    updateSettingsBadge();
     return;
   }
-
-  btnEl.disabled = true;
-  statusEl.className = 'save-status busy';
-  statusEl.textContent = 'Testing credentials…';
-
-  try {
-    const res = await fetch(TEST_ENDPOINTS[eco](), {
-      headers: { 'x-cgr-user': userEl.value, 'x-cgr-pass': passEl.value },
-    });
-    if (res.status === 401) {
-      statusEl.className = 'save-status error';
-      statusEl.textContent = '✗ Invalid credentials (401)';
-    } else if (res.status === 403) {
-      statusEl.className = 'save-status error';
-      statusEl.textContent = '✗ Access denied (403)';
-    } else {
-      statusEl.className = 'save-status ok';
-      statusEl.textContent = '✓ Saved — credentials valid';
-      setTimeout(() => { statusEl.textContent = ''; statusEl.className = 'save-status'; }, 3000);
-    }
-  } catch (err) {
-    statusEl.className = 'save-status error';
-    statusEl.textContent = `✗ ${err.message}`;
-  } finally {
-    btnEl.disabled = false;
-  }
+  await runTest(eco, userEl.value, passEl.value, { autoClear: true });
 }
+
+async function testCredsUI(eco) {
+  const userEl = document.getElementById(`${eco}-cgr-user`);
+  const passEl = document.getElementById(`${eco}-cgr-pass`);
+  if (!userEl.value) {
+    setStatus(eco, 'error', '✗ No credentials entered');
+    return;
+  }
+  await runTest(eco, userEl.value, passEl.value, { autoClear: false });
+}
+
+async function runStartupTests() {
+  await Promise.all(Object.keys(CREDS).map(async eco => {
+    const { user, pass } = getCreds(eco);
+    if (!user) return;
+    await runTest(eco, user, pass, { autoClear: false });
+  }));
+}
+runStartupTests();
 
 // ── Tab switching ─────────────────────────────────────────────────────────────
 

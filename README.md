@@ -1,12 +1,12 @@
 # package-browser
 
-A simple tool to compare package versions across public registries and the **Chainguard registry** (`libraries.cgr.dev`). Supports npm, Maven, and PyPI.
+A simple tool to compare package versions across public registries and the **Chainguard registry** (`libraries.cgr.dev`). Supports npm, Maven, and PyPI — for a single package or a whole manifest at once.
 
-Enter a package name (or Maven `groupId:artifactId`) and get a side-by-side table showing which versions are available in each registry, whether they were built by Chainguard or mirrored from upstream, and when each version was published.
+Enter a package name (or Maven `groupId:artifactId`) and get a side-by-side table showing which versions are available in each registry, whether they were built by Chainguard or mirrored from upstream, and when each version was published. Or use the **bulk check** tab to drop in a `package.json` / `requirements.txt` / lockfile and see Chainguard coverage across every dependency at once.
 
 ## Features
 
-- Three tabs: **npm**, **maven**, **pypi**
+- Four tabs: **npm**, **maven**, **pypi**, **bulk check**
 - Side-by-side version comparison: public registry vs Chainguard
 - Built vs Secure Mirror badge per Chainguard version
 - Coverage summary: % of versions in Chainguard, broken down by Built vs Mirrored
@@ -14,6 +14,7 @@ Enter a package name (or Maven `groupId:artifactId`) and get a side-by-side tabl
 - Pre-release versions hidden by default
 - Limit to 50 most recent versions by default
 - Copy results as formatted plain text for sharing in Slack or a text editor
+- Bulk check: paste or drag-and-drop a manifest (`package.json`, `package-lock.json`, `yarn.lock`, `requirements.txt`, `poetry.lock`) to check Chainguard coverage for every dependency in one pass; click any row to drill into the per-package view
 - Credentials stored per ecosystem in browser `localStorage` — never sent anywhere except the local proxy
 
 ## Start
@@ -45,19 +46,19 @@ Then open [http://localhost:3000](http://localhost:3000).
 
 ## Configuration
 
-Click the **gear icon** (top right) to open the settings panel. Each ecosystem has its own username and password — click **Save** after entering credentials to verify they are valid.
+Click the **gear icon** (top right) to open the settings panel. Each ecosystem has its own username and password. **Save** stores and tests them; **Test** re-checks the current values without saving. All three tokens are also tested on page load — if any fail (e.g. expired pull token), a red dot appears on the gear icon and the failure reason is shown in the settings panel.
 
 To get credentials, run one of the following depending on which registry you need:
 
 ```bash
 # npm / JavaScript
-chainctl auth pull-token --repository=javascript --parent=andrewd.dev
+chainctl auth pull-token --repository=javascript --parent=andrewd.dev --ttl=8760h
 
 # Maven / Java
-chainctl auth pull-token --repository=java --parent=andrewd.dev
+chainctl auth pull-token --repository=java --parent=andrewd.dev --ttl=8760h
 
 # PyPI / Python
-chainctl auth pull-token --repository=python --parent=andrewd.dev
+chainctl auth pull-token --repository=python --parent=andrewd.dev --ttl=8760h
 ```
 
 Copy the username and password from the output into the corresponding fields in the settings panel.
