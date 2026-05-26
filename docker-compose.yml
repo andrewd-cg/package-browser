@@ -1,5 +1,20 @@
 services:
+  init-data:
+    image: cgr.dev/chainguard/wolfi-base:latest
+    pull_policy: always
+    command: ["sh", "-c", "chown 65532:65532 /data"]
+    volumes:
+      - ./data:/data
+
   package-browser:
     image: ghcr.io/andrewd-cg/package-browser:latest
+    pull_policy: always
+    depends_on:
+      init-data:
+        condition: service_completed_successfully
     ports:
       - "3000:3000"
+    environment:
+      MALWARE_DB_PATH: /data/malware.db
+    volumes:
+      - ./data:/data

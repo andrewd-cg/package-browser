@@ -382,8 +382,14 @@ Bun.serve({
       const stream = new ReadableStream({
         async start(ctrl) {
           const enc = new TextEncoder();
-          const emit = obj => ctrl.enqueue(enc.encode(JSON.stringify(obj) + '\n'));
+          let closed = false;
+          const emit = obj => {
+            if (closed) return;
+            try { ctrl.enqueue(enc.encode(JSON.stringify(obj) + '\n')); }
+            catch { closed = true; }
+          };
           const ticker = setInterval(() => emit({ progress: { fetched: syncState.fetched, total: syncState.total } }), 400);
+          req.signal?.addEventListener('abort', () => { closed = true; clearInterval(ticker); }, { once: true });
           try {
             emit({ start: { since } });
             await runMalwareSync({ user, pass, since });
@@ -391,8 +397,9 @@ Bun.serve({
           } catch (err) {
             emit({ error: err.message });
           } finally {
+            closed = true;
             clearInterval(ticker);
-            ctrl.close();
+            try { ctrl.close(); } catch {}
           }
         },
       });
