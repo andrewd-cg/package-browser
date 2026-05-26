@@ -78,9 +78,9 @@ async function runMalwareSync({ user, pass, since, ecosystem = 'javascript' }) {
         for (const it of rows) {
           insertMalware.run(
             it.package_name,
-            it.version ?? null,
+            it.version ?? '',
             it.scope ?? null,
-            it.malid ?? null,
+            it.malid ?? '',
             it.source ?? null,
             it.blocked_at,
             it.ecosystem || ecoName,
@@ -404,6 +404,7 @@ Bun.serve({
       const q       = url.searchParams.get('q')       || '';
       const ver     = url.searchParams.get('version') || '';
       const reason  = url.searchParams.get('reason')  || '';
+      const src     = url.searchParams.get('source')  || '';
       const since   = url.searchParams.get('since')   || '';
       const until   = url.searchParams.get('until')   || '';
       const limit   = Math.min(parseInt(url.searchParams.get('limit')  || '200', 10) || 200, 1000);
@@ -414,6 +415,7 @@ Bun.serve({
       if (q)     { where.push('package_name LIKE ?'); args.push(`%${q}%`); }
       if (ver)   { where.push('version LIKE ?');      args.push(`%${ver}%`); }
       if (reason){ where.push('reason_json LIKE ?');  args.push(`%${reason}%`); }
+      if (src)   { where.push('source = ?');          args.push(src); }
       if (since) { where.push('blocked_at >= ?');     args.push(since); }
       if (until) { where.push('blocked_at <  ?');     args.push(until); }
       const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
@@ -427,6 +429,46 @@ Bun.serve({
       `).all(...args, limit, offset);
       const out = rows.map(r => ({ ...r, reason: JSON.parse(r.reason_json || '[]'), reason_json: undefined }));
       return new Response(JSON.stringify({ total, rows: out, limit, offset }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    // Per-day findings histogram (same filter shape as /search).
+    if (url.pathname === '/api/cgr-malware/histogram') {
+      const q      = url.searchParams.get('q')       || '';
+      const ver    = url.searchParams.get('version') || '';
+      const reason = url.searchParams.get('reason')  || '';
+      const src    = url.searchParams.get('source')  || '';
+      const since  = url.searchParams.get('since')   || '';
+      const until  = url.searchParams.get('until')   || '';
+      const where = ["ecosystem = 'npm'"];
+      const args  = [];
+      if (q)     { where.push('package_name LIKE ?'); args.push(`%${q}%`); }
+      if (ver)   { where.push('version LIKE ?');      args.push(`%${ver}%`); }
+      if (reason){ where.push('reason_json LIKE ?');  args.push(`%${reason}%`); }
+      if (src)   { where.push('source = ?');          args.push(src); }
+      if (since) { where.push('blocked_at >= ?');     args.push(since); }
+      if (until) { where.push('blocked_at <  ?');     args.push(until); }
+      const whereSql = `WHERE ${where.join(' AND ')}`;
+      const rows = db.prepare(`
+        SELECT substr(blocked_at, 1, 10) AS day, COUNT(*) AS n
+        FROM malware ${whereSql}
+        GROUP BY day
+        ORDER BY day
+      `).all(...args);
+      return new Response(JSON.stringify(rows), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    // All malware entries for one package (any version, any source).
+    // Used by the npm tab to badge versions/packages flagged as malware.
+    if (url.pathname === '/api/cgr-malware/check') {
+      const pkg = url.searchParams.get('package') || '';
+      if (!pkg) return new Response(JSON.stringify({ rows: [] }), { headers: { 'Content-Type': 'application/json' } });
+      const rows = db.prepare(`
+        SELECT package_name, version, scope, malid, source, blocked_at, reason_json, description
+        FROM malware
+        WHERE ecosystem = 'npm' AND package_name = ?
+      `).all(pkg);
+      const out = rows.map(r => ({ ...r, reason: JSON.parse(r.reason_json || '[]'), reason_json: undefined }));
+      return new Response(JSON.stringify({ rows: out }), { headers: { 'Content-Type': 'application/json' } });
     }
 
     // Distinct reasons (for filter facets). Individual MAL-YYYY-N advisory IDs
