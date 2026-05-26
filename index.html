@@ -15,10 +15,81 @@
   }
 
   /* Accent per active tab */
-  [data-active-tab="npm"]   { --accent: #7dd3fc; --accent-glow: rgba(125,211,252,0.15); }
-  [data-active-tab="maven"] { --accent: #86efac; --accent-glow: rgba(134,239,172,0.15); }
-  [data-active-tab="pypi"]  { --accent: #fde68a; --accent-glow: rgba(253,230,138,0.15); }
-  [data-active-tab="bulk"]  { --accent: #f9a8d4; --accent-glow: rgba(249,168,212,0.15); }
+  [data-active-tab="npm"]     { --accent: #7dd3fc; --accent-glow: rgba(125,211,252,0.15); }
+  [data-active-tab="maven"]   { --accent: #86efac; --accent-glow: rgba(134,239,172,0.15); }
+  [data-active-tab="pypi"]    { --accent: #fde68a; --accent-glow: rgba(253,230,138,0.15); }
+  [data-active-tab="bulk"]    { --accent: #f9a8d4; --accent-glow: rgba(249,168,212,0.15); }
+  [data-active-tab="malware"] { --accent: #fca5a5; --accent-glow: rgba(252,165,165,0.18); }
+
+  .mal-bar {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    flex-wrap: wrap;
+    margin-bottom: 0.75rem;
+    font-size: 0.85rem;
+    color: #475569;
+  }
+  .mal-bar input[type="text"], .mal-bar input[type="date"], .mal-bar select {
+    border: 1px solid #cbd5e1;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 0.85rem;
+    outline: none;
+  }
+  .mal-bar input[type="text"]:focus, .mal-bar input[type="date"]:focus, .mal-bar select:focus {
+    border-color: var(--accent);
+  }
+  .mal-progress {
+    height: 6px;
+    background: #e2e8f0;
+    border-radius: 99px;
+    overflow: hidden;
+    flex: 1;
+    min-width: 120px;
+  }
+  .mal-progress > div {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.2s;
+  }
+  .mal-reason {
+    display: inline-block;
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 0.7rem;
+    color: #475569;
+    background: #f1f5f9;
+    border: 1px solid #e2e8f0;
+    border-radius: 4px;
+    padding: 1px 6px;
+    margin: 1px 2px;
+    white-space: nowrap;
+  }
+  .mal-reason.mal-id { background: #fef2f2; border-color: #fecaca; color: #b91c1c; }
+  .mal-reason.mal-id a { color: inherit; text-decoration: none; }
+  .mal-reason.mal-id a:hover { text-decoration: underline; }
+  .mal-empty {
+    padding: 2rem 1rem;
+    text-align: center;
+    color: #64748b;
+    font-size: 0.9rem;
+  }
+  .mal-stat {
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    color: #1a1a2e;
+    font-weight: 600;
+  }
+  .mal-version-text {
+    display: inline-block;
+    max-width: 10ch;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 0.78rem;
+    color: #475569;
+    vertical-align: middle;
+  }
 
   .bulk-progress {
     font-size: 0.85rem;
@@ -482,6 +553,7 @@
     <button class="tab-btn" data-tab="maven">maven</button>
     <button class="tab-btn" data-tab="pypi">pypi</button>
     <button class="tab-btn" data-tab="bulk">bulk check</button>
+    <button class="tab-btn" data-tab="malware">malware</button>
   </nav>
   <button id="settings-btn" title="Settings" aria-label="Settings">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -629,6 +701,45 @@
       <div class="status-placeholder">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
         Paste a package.json or requirements.txt above to check Chainguard coverage
+      </div>
+    </div>
+  </div>
+
+  <!-- malware tab -->
+  <div id="tab-malware" class="tab-pane">
+    <div class="mal-bar">
+      <span><span class="mal-stat" id="mal-total">0</span> entries cached</span>
+      <span style="color:#94a3b8;">·</span>
+      <span>Last sync: <span class="mal-stat" id="mal-last-sync">never</span></span>
+      <span style="flex:1"></span>
+      <button type="button" class="fetch-btn" id="mal-refresh-btn" style="padding:6px 14px; font-size:0.85rem;">Update Malware DB</button>
+      <button type="button" class="copy-btn" id="mal-full-btn" title="Re-download from 2026-01-01">Full re-sync</button>
+    </div>
+    <div class="mal-bar" id="mal-sync-progress" style="display:none;">
+      <span id="mal-sync-text">Syncing…</span>
+      <div class="mal-progress"><div id="mal-sync-fill" style="width:0%"></div></div>
+      <span class="mal-stat" id="mal-sync-count"></span>
+    </div>
+    <div class="mal-bar">
+      <input type="text" id="mal-q" placeholder="Package name contains…" style="min-width:200px;">
+      <input type="text" id="mal-version" placeholder="Version contains…" style="min-width:140px;">
+      <select id="mal-reason" style="min-width:200px;"><option value="">All reasons</option></select>
+      <span>From</span><input type="date" id="mal-since">
+      <span>to</span><input type="date" id="mal-until">
+      <button type="button" class="copy-btn" id="mal-clear-btn">Clear</button>
+    </div>
+    <div class="mal-bar">
+      <span><span class="mal-stat" id="mal-result-count">0</span> matches</span>
+      <span style="flex:1"></span>
+      <button type="button" class="copy-btn" id="mal-prev-btn" disabled>← Prev</button>
+      <span id="mal-page-info">—</span>
+      <button type="button" class="copy-btn" id="mal-next-btn" disabled>Next →</button>
+    </div>
+    <div class="banners" id="mal-banners"></div>
+    <div class="results" id="mal-results">
+      <div class="status-placeholder">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
+        Click <strong>Refresh</strong> to populate the local malware cache.
       </div>
     </div>
   </div>
@@ -1955,6 +2066,199 @@ document.getElementById('bulk-form').addEventListener('submit', async (e) => {
     progressWrap.style.display = 'none';
   }
 });
+
+// ── malware tab ───────────────────────────────────────────────────────────────
+
+const malState = { page: 0, pageSize: 100, total: 0, autoSyncTried: false };
+
+function malFmtDate(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const diffH = (Date.now() - d.getTime()) / 3600000;
+  if (diffH < 1) return `${Math.max(1, Math.round(diffH * 60))}m ago`;
+  if (diffH < 48) return `${Math.round(diffH)}h ago`;
+  return dateFmt.format(d);
+}
+
+function malRenderReason(r) {
+  if (/^MAL-\d{4}-\d+$/i.test(r)) {
+    return `<span class="mal-reason mal-id"><a href="https://osv.dev/vulnerability/${escHtml(r)}" target="_blank" rel="noopener">${escHtml(r)}</a></span>`;
+  }
+  return `<span class="mal-reason">${escHtml(r)}</span>`;
+}
+
+async function malLoadStatus() {
+  const res = await fetch('/api/cgr-malware/status');
+  const s = await res.json();
+  document.getElementById('mal-total').textContent = s.total.toLocaleString();
+  document.getElementById('mal-last-sync').textContent = s.lastSyncAt ? malFmtDate(s.lastSyncAt) : 'never';
+  return s;
+}
+
+async function malLoadReasons() {
+  const res = await fetch('/api/cgr-malware/reasons');
+  const data = await res.json();
+  const sel = document.getElementById('mal-reason');
+  const current = sel.value;
+  sel.innerHTML = '<option value="">All reasons</option>' +
+    data.map(r => {
+      const val = r.searchAs ?? r.reason;
+      return `<option value="${escHtml(val)}">${escHtml(r.reason)} (${r.n.toLocaleString()})</option>`;
+    }).join('');
+  sel.value = current;
+}
+
+async function malRunSearch() {
+  const q       = document.getElementById('mal-q').value.trim();
+  const ver     = document.getElementById('mal-version').value.trim();
+  const reason  = document.getElementById('mal-reason').value;
+  const sinceD  = document.getElementById('mal-since').value;
+  const untilD  = document.getElementById('mal-until').value;
+  const params = new URLSearchParams();
+  if (q)      params.set('q', q);
+  if (ver)    params.set('version', ver);
+  if (reason) params.set('reason', reason);
+  if (sinceD) params.set('since', `${sinceD}T00:00:00Z`);
+  if (untilD) {
+    const d = new Date(untilD + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1);
+    params.set('until', d.toISOString().slice(0, 19) + 'Z');
+  }
+  params.set('limit', malState.pageSize);
+  params.set('offset', malState.page * malState.pageSize);
+
+  const res = await fetch(`/api/cgr-malware/search?${params}`);
+  const data = await res.json();
+  malState.total = data.total;
+  document.getElementById('mal-result-count').textContent = data.total.toLocaleString();
+
+  const start = data.offset + 1;
+  const end = Math.min(data.offset + data.rows.length, data.total);
+  document.getElementById('mal-page-info').textContent = data.total === 0 ? '—' : `${start.toLocaleString()}–${end.toLocaleString()}`;
+  document.getElementById('mal-prev-btn').disabled = malState.page === 0;
+  document.getElementById('mal-next-btn').disabled = end >= data.total;
+
+  const el = document.getElementById('mal-results');
+  if (data.rows.length === 0) {
+    el.innerHTML = `<div class="mal-empty">No malware entries match these filters.</div>`;
+    return;
+  }
+  el.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr>
+      <th>Package</th><th>Version</th><th>Blocked at</th><th>Reasons</th>
+    </tr></thead>
+    <tbody>${data.rows.map(r => `
+      <tr>
+        <td><a href="https://www.npmjs.com/package/${encodeURIComponent(r.package_name)}" target="_blank" rel="noopener" style="font-family:'SFMono-Regular',Consolas,monospace; font-size:0.82rem;">${escHtml(r.package_name)}</a></td>
+        <td title="${escHtml(r.version || '')}"><span class="mal-version-text">${escHtml(r.version || '—')}</span></td>
+        <td style="font-size:0.8rem; white-space:nowrap;" title="${escHtml(r.blocked_at)}">${escHtml(malFmtDate(r.blocked_at))}</td>
+        <td>${r.reason.map(malRenderReason).join(' ')}</td>
+      </tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+let malSearchTimer = null;
+function malScheduleSearch(immediate = false) {
+  clearTimeout(malSearchTimer);
+  malSearchTimer = setTimeout(() => { malState.page = 0; malRunSearch(); }, immediate ? 0 : 250);
+}
+
+async function malRunSync({ full = false } = {}) {
+  const { user, pass } = getCreds('npm');
+  if (!user) {
+    document.getElementById('mal-banners').innerHTML =
+      `<div class="banner error">No npm credentials configured. Open settings (gear icon) and save a Chainguard javascript pull-token first.</div>`;
+    return;
+  }
+  document.getElementById('mal-banners').innerHTML = '';
+  const progressWrap = document.getElementById('mal-sync-progress');
+  const progressFill = document.getElementById('mal-sync-fill');
+  const progressText = document.getElementById('mal-sync-text');
+  const progressCount = document.getElementById('mal-sync-count');
+  const refreshBtn = document.getElementById('mal-refresh-btn');
+  const fullBtn = document.getElementById('mal-full-btn');
+  refreshBtn.disabled = true;
+  fullBtn.disabled = true;
+  progressWrap.style.display = 'flex';
+  progressFill.style.width = '0%';
+  progressText.textContent = full ? 'Full sync from 2026-01-01…' : 'Syncing…';
+  progressCount.textContent = '';
+
+  try {
+    const res = await fetch('/api/cgr-malware/sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-cgr-user': user, 'x-cgr-pass': pass },
+      body: JSON.stringify(full ? { full: true } : {}),
+    });
+    if (!res.ok) {
+      const body = await res.text();
+      throw new Error(body || `HTTP ${res.status}`);
+    }
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      const lines = buf.split('\n'); buf = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        let msg; try { msg = JSON.parse(line); } catch { continue; }
+        if (msg.progress) {
+          const { fetched, total } = msg.progress;
+          progressCount.textContent = total ? `${fetched.toLocaleString()} / ${total.toLocaleString()}` : fetched.toLocaleString();
+          progressFill.style.width = total ? `${Math.min(100, Math.round(fetched / total * 100))}%` : '0%';
+        } else if (msg.error) {
+          throw new Error(msg.error);
+        } else if (msg.done) {
+          progressFill.style.width = '100%';
+        }
+      }
+    }
+    await malLoadStatus();
+    await malLoadReasons();
+    malScheduleSearch(true);
+  } catch (err) {
+    document.getElementById('mal-banners').innerHTML =
+      `<div class="banner error">Sync failed: ${escHtml(err.message)}</div>`;
+  } finally {
+    refreshBtn.disabled = false;
+    fullBtn.disabled = false;
+    setTimeout(() => { progressWrap.style.display = 'none'; }, 800);
+  }
+}
+
+document.getElementById('mal-refresh-btn').addEventListener('click', () => malRunSync());
+document.getElementById('mal-full-btn').addEventListener('click', () => {
+  if (confirm('Re-fetch the full dataset since 2026-01-01? This may take a few minutes.')) malRunSync({ full: true });
+});
+document.getElementById('mal-clear-btn').addEventListener('click', () => {
+  document.getElementById('mal-q').value = '';
+  document.getElementById('mal-version').value = '';
+  document.getElementById('mal-reason').value = '';
+  document.getElementById('mal-since').value = '';
+  document.getElementById('mal-until').value = '';
+  malScheduleSearch(true);
+});
+['mal-q', 'mal-version'].forEach(id => document.getElementById(id).addEventListener('input', () => malScheduleSearch()));
+['mal-reason', 'mal-since', 'mal-until'].forEach(id => document.getElementById(id).addEventListener('change', () => malScheduleSearch(true)));
+document.getElementById('mal-prev-btn').addEventListener('click', () => { if (malState.page > 0) { malState.page--; malRunSearch(); } });
+document.getElementById('mal-next-btn').addEventListener('click', () => { malState.page++; malRunSearch(); });
+
+(async function malInit() {
+  const s = await malLoadStatus();
+  if (s.total > 0) {
+    await malLoadReasons();
+    malScheduleSearch(true);
+  }
+  // Auto-sync on startup if creds available: full if empty, delta otherwise.
+  const { user } = getCreds('npm');
+  if (user && !malState.autoSyncTried) {
+    malState.autoSyncTried = true;
+    malRunSync({ full: s.total === 0 });
+  }
+})();
 </script>
 </body>
 </html>
