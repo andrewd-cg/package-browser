@@ -362,7 +362,8 @@ Bun.serve({
       return new Response(JSON.stringify(malwareStatus()), { headers: { 'Content-Type': 'application/json' } });
     }
 
-    // Malware cache sync (incremental). Streams NDJSON progress lines while running.
+    // Malware cache sync (fire-and-forget). Server kicks off the sync in the
+    // background; client polls /api/cgr-malware/status for progress.
     if (url.pathname === '/api/cgr-malware/sync' && req.method === 'POST') {
       if (syncState.running) {
         return new Response(JSON.stringify({ error: 'Sync already in progress', status: malwareStatus() }), { status: 409, headers: { 'Content-Type': 'application/json' } });
@@ -379,31 +380,9 @@ Bun.serve({
         if (latest?.m) since = latest.m;
       }
 
-      const stream = new ReadableStream({
-        async start(ctrl) {
-          const enc = new TextEncoder();
-          let closed = false;
-          const emit = obj => {
-            if (closed) return;
-            try { ctrl.enqueue(enc.encode(JSON.stringify(obj) + '\n')); }
-            catch { closed = true; }
-          };
-          const ticker = setInterval(() => emit({ progress: { fetched: syncState.fetched, total: syncState.total } }), 400);
-          req.signal?.addEventListener('abort', () => { closed = true; clearInterval(ticker); }, { once: true });
-          try {
-            emit({ start: { since } });
-            await runMalwareSync({ user, pass, since });
-            emit({ done: malwareStatus() });
-          } catch (err) {
-            emit({ error: err.message });
-          } finally {
-            closed = true;
-            clearInterval(ticker);
-            try { ctrl.close(); } catch {}
-          }
-        },
-      });
-      return new Response(stream, { headers: { 'Content-Type': 'application/x-ndjson' } });
+      runMalwareSync({ user, pass, since }).catch(() => { /* err captured in syncState.error */ });
+
+      return new Response(JSON.stringify({ started: true, since, status: malwareStatus() }), { status: 202, headers: { 'Content-Type': 'application/json' } });
     }
 
     // Malware search (filtered, server-side).

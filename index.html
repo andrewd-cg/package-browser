@@ -2319,6 +2319,44 @@ function malScheduleSearch(immediate = false) {
   malSearchTimer = setTimeout(() => { malState.page = 0; malRunSearch(); }, immediate ? 0 : 250);
 }
 
+function malRenderSyncProgress(s) {
+  const progressFill  = document.getElementById('mal-sync-fill');
+  const progressCount = document.getElementById('mal-sync-count');
+  const { fetched, total } = s;
+  progressCount.textContent = total ? `${fetched.toLocaleString()} / ${total.toLocaleString()}` : fetched.toLocaleString();
+  progressFill.style.width = total ? `${Math.min(100, Math.round(fetched / total * 100))}%` : '0%';
+}
+
+async function malPollSyncUntilDone() {
+  const progressWrap = document.getElementById('mal-sync-progress');
+  const refreshBtn   = document.getElementById('mal-refresh-btn');
+  const fullBtn      = document.getElementById('mal-full-btn');
+  try {
+    while (true) {
+      const s = await (await fetch('/api/cgr-malware/status')).json();
+      malRenderSyncProgress(s.sync);
+      document.getElementById('mal-total').textContent = s.total.toLocaleString();
+      if (!s.sync.running) {
+        if (s.sync.error) {
+          document.getElementById('mal-banners').innerHTML =
+            `<div class="banner error">Sync failed: ${escHtml(s.sync.error)}</div>`;
+        } else {
+          document.getElementById('mal-sync-fill').style.width = '100%';
+        }
+        break;
+      }
+      await new Promise(r => setTimeout(r, 500));
+    }
+    await malLoadStatus();
+    await malLoadReasons();
+    malDispatchFilters(true);
+  } finally {
+    refreshBtn.disabled = false;
+    fullBtn.disabled = false;
+    setTimeout(() => { progressWrap.style.display = 'none'; }, 800);
+  }
+}
+
 async function malRunSync({ full = false } = {}) {
   const { user, pass } = getCreds('npm');
   if (!user) {
@@ -2327,12 +2365,12 @@ async function malRunSync({ full = false } = {}) {
     return;
   }
   document.getElementById('mal-banners').innerHTML = '';
-  const progressWrap = document.getElementById('mal-sync-progress');
-  const progressFill = document.getElementById('mal-sync-fill');
-  const progressText = document.getElementById('mal-sync-text');
+  const progressWrap  = document.getElementById('mal-sync-progress');
+  const progressFill  = document.getElementById('mal-sync-fill');
+  const progressText  = document.getElementById('mal-sync-text');
   const progressCount = document.getElementById('mal-sync-count');
-  const refreshBtn = document.getElementById('mal-refresh-btn');
-  const fullBtn = document.getElementById('mal-full-btn');
+  const refreshBtn    = document.getElementById('mal-refresh-btn');
+  const fullBtn       = document.getElementById('mal-full-btn');
   refreshBtn.disabled = true;
   fullBtn.disabled = true;
   progressWrap.style.display = 'flex';
@@ -2350,39 +2388,15 @@ async function malRunSync({ full = false } = {}) {
       const body = await res.text();
       throw new Error(body || `HTTP ${res.status}`);
     }
-    const reader = res.body.getReader();
-    const dec = new TextDecoder();
-    let buf = '';
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      const lines = buf.split('\n'); buf = lines.pop();
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        let msg; try { msg = JSON.parse(line); } catch { continue; }
-        if (msg.progress) {
-          const { fetched, total } = msg.progress;
-          progressCount.textContent = total ? `${fetched.toLocaleString()} / ${total.toLocaleString()}` : fetched.toLocaleString();
-          progressFill.style.width = total ? `${Math.min(100, Math.round(fetched / total * 100))}%` : '0%';
-        } else if (msg.error) {
-          throw new Error(msg.error);
-        } else if (msg.done) {
-          progressFill.style.width = '100%';
-        }
-      }
-    }
-    await malLoadStatus();
-    await malLoadReasons();
-    malDispatchFilters(true);
   } catch (err) {
-    document.getElementById('mal-banners').innerHTML =
-      `<div class="banner error">Sync failed: ${escHtml(err.message)}</div>`;
-  } finally {
     refreshBtn.disabled = false;
     fullBtn.disabled = false;
-    setTimeout(() => { progressWrap.style.display = 'none'; }, 800);
+    progressWrap.style.display = 'none';
+    document.getElementById('mal-banners').innerHTML =
+      `<div class="banner error">Sync failed: ${escHtml(err.message)}</div>`;
+    return;
   }
+  await malPollSyncUntilDone();
 }
 
 document.getElementById('mal-refresh-btn').addEventListener('click', () => malRunSync());
@@ -2408,6 +2422,21 @@ document.getElementById('mal-next-btn').addEventListener('click', () => { malSta
   if (s.total > 0) {
     await malLoadReasons();
     malDispatchFilters(true);
+  }
+  // If a sync is already running server-side (started by another tab or before
+  // a reload), attach polling without kicking off a new sync.
+  if (s.sync?.running) {
+    malState.autoSyncTried = true;
+    const progressWrap = document.getElementById('mal-sync-progress');
+    const refreshBtn   = document.getElementById('mal-refresh-btn');
+    const fullBtn      = document.getElementById('mal-full-btn');
+    refreshBtn.disabled = true;
+    fullBtn.disabled = true;
+    progressWrap.style.display = 'flex';
+    document.getElementById('mal-sync-text').textContent = 'Syncing…';
+    malRenderSyncProgress(s.sync);
+    malPollSyncUntilDone();
+    return;
   }
   // Auto-sync on startup if creds available: full if empty, delta otherwise.
   const { user } = getCreds('npm');
