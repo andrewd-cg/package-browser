@@ -469,6 +469,32 @@
     letter-spacing: 0.04em;
     cursor: default;
   }
+  .pypi-platforms {
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 0.74rem;
+    color: #475569;
+    cursor: help;
+    line-height: 1.45;
+  }
+  .pypi-platforms .pp-py { display: block; color: #1a1a2e; font-weight: 600; }
+  .pypi-platforms .pp-os { display: block; color: #64748b; }
+  #app-tooltip {
+    position: fixed;
+    background: #1a1a2e;
+    color: #f1f5f9;
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 0.75rem;
+    line-height: 1.5;
+    max-width: 480px;
+    white-space: pre-wrap;
+    z-index: 9999;
+    pointer-events: none;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    opacity: 0;
+    transition: opacity 0.08s;
+  }
+  #app-tooltip.visible { opacity: 1; }
   .badge-malware {
     background: #fee2e2;
     color: #991b1b;
@@ -812,6 +838,44 @@ function copyToClipboard(text, btn) {
     confirm();
   }
 }
+
+// Shared fast hover tooltip. Any element with `data-tip` attribute gets a
+// dark floating tooltip after ~50ms (vs the browser's native ~1s `title` delay).
+let _appTooltipEl = null;
+let _appTooltipTimer = null;
+function _appTooltipShow(target) {
+  if (!_appTooltipEl) {
+    _appTooltipEl = document.createElement('div');
+    _appTooltipEl.id = 'app-tooltip';
+    document.body.appendChild(_appTooltipEl);
+  }
+  _appTooltipEl.textContent = target.dataset.tip || '';
+  _appTooltipEl.classList.add('visible');
+  // Position: below the target, clamped to viewport.
+  const rect = target.getBoundingClientRect();
+  const tip  = _appTooltipEl.getBoundingClientRect();
+  let x = rect.left + rect.width / 2 - tip.width / 2;
+  let y = rect.bottom + 6;
+  x = Math.max(8, Math.min(window.innerWidth  - tip.width  - 8, x));
+  if (y + tip.height > window.innerHeight - 8) y = rect.top - tip.height - 6;
+  _appTooltipEl.style.left = `${x}px`;
+  _appTooltipEl.style.top  = `${y}px`;
+}
+function _appTooltipHide() {
+  if (_appTooltipEl) _appTooltipEl.classList.remove('visible');
+}
+document.addEventListener('mouseover', e => {
+  const t = e.target.closest?.('[data-tip]');
+  if (!t) return;
+  clearTimeout(_appTooltipTimer);
+  _appTooltipTimer = setTimeout(() => _appTooltipShow(t), 50);
+});
+document.addEventListener('mouseout', e => {
+  if (e.target.closest?.('[data-tip]')) {
+    clearTimeout(_appTooltipTimer);
+    _appTooltipHide();
+  }
+});
 
 function copyCredHint(btn) {
   const code = btn.previousElementSibling;
@@ -1629,34 +1693,128 @@ function pypiIsPrerelease(v) {
   return /\.(dev|a|alpha|b|beta|rc|c)\d*/i.test(v) || /[^.]a\d/i.test(v) || /[^.]b\d/i.test(v) || /rc\d/i.test(v) || /alpha/i.test(v) || /beta/i.test(v);
 }
 
+// Plain-English explanations for the platform classes, shown in the hover tooltip.
+const PLATFORM_HELP = {
+  'Linux (glibc)':       'manylinux — works on most Linux distros (Debian, Ubuntu, RHEL, CentOS, Fedora, Amazon Linux, etc.)',
+  'Linux (musl/Alpine)': 'musllinux — works on Alpine Linux and other musl-libc distros',
+  'Linux':               'Generic Linux tag — usually means manylinux compatibility was not declared',
+  'macOS':               'Apple macOS',
+  'Windows':             'Microsoft Windows',
+  'pure Python':         'No native code; any OS with a compatible Python interpreter',
+};
+
+function prettyArch(a) {
+  if (a === 'aarch64')     return 'arm64';
+  if (a === 'i686')        return 'x86';
+  if (a === 'universal2')  return 'universal2 (Intel+ARM)';
+  return a;
+}
+
+// Classify a PEP 425 platform tag into {os, arch} so similar wheels group together.
+function classifyPlatform(p) {
+  if (p === 'any') return { os: 'pure Python', arch: null };
+  let m;
+  if (m = p.match(/^manylinux[_\d]*_(.+)$/)) return { os: 'Linux (glibc)',       arch: m[1] };
+  if (m = p.match(/^musllinux_[_\d]+_(.+)$/)) return { os: 'Linux (musl/Alpine)', arch: m[1] };
+  if (m = p.match(/^linux_(.+)$/))            return { os: 'Linux',                arch: m[1] };
+  if (m = p.match(/^macosx_[_\d]+_(.+)$/))    return { os: 'macOS',                arch: m[1] };
+  if (p === 'win32')                          return { os: 'Windows',              arch: 'x86' };
+  if (m = p.match(/^win_(.+)$/))              return { os: 'Windows',              arch: m[1] };
+  return { os: p, arch: null };
+}
+
+// Turn the set of PEP 425 python tags into "Python 3.11–3.14" style copy.
+function compactPyVersions(pythons) {
+  const minor = tag => parseInt(tag.match(/^[a-z]p?(\d)(\d+)$/i)?.[2] ?? '0', 10);
+  const major = tag => parseInt(tag.match(/^[a-z]p?(\d)(\d+)$/i)?.[1] ?? '0', 10);
+
+  const cpyMinors = [...pythons].filter(p => /^cp\d+$/.test(p)).map(p => `${major(p)}.${minor(p)}`).sort((a, b) => parseFloat(a) - parseFloat(b));
+  const pypyMinors = [...pythons].filter(p => /^pp\d+$/.test(p)).map(p => `${major(p)}.${minor(p)}`).sort((a, b) => parseFloat(a) - parseFloat(b));
+  const generic    = [...pythons].filter(p => /^py\d+$/.test(p)).sort();
+
+  const out = [];
+  if (cpyMinors.length) {
+    const lo = cpyMinors[0], hi = cpyMinors[cpyMinors.length - 1];
+    out.push(lo === hi ? `Python ${lo}` : `Python ${lo}–${hi}`);
+  } else if (generic.length) {
+    if (generic.length === 1 && generic[0] === 'py3') out.push('Python 3.x');
+    else out.push(`Python ${generic.map(t => `${major(t)}.${minor(t) || 'x'}`).join(', ')}`);
+  }
+  if (pypyMinors.length) {
+    const lo = pypyMinors[0], hi = pypyMinors[pypyMinors.length - 1];
+    out.push(lo === hi ? `PyPy ${lo}` : `PyPy ${lo}–${hi}`);
+  }
+  return out.join(' + ');
+}
+
+function compactPlatforms(osArchSet) {
+  const byOs = new Map();
+  for (const oa of osArchSet) {
+    const [os, arch] = oa.split('/');
+    if (!byOs.has(os)) byOs.set(os, new Set());
+    if (arch) byOs.get(os).add(prettyArch(arch));
+  }
+  const out = [];
+  for (const [os, arches] of byOs) {
+    const aList = [...arches].sort();
+    out.push(aList.length === 0 ? os : `${os} ${aList.join('+')}`);
+  }
+  return out.join(' · ');
+}
+
 function parseCgrSimpleIndex(html) {
   const doc = new DOMParser().parseFromString(html, 'text/html');
-  const versionMap = new Map(); // version → { type, url }
+  const versionMap = new Map(); // version → { type, url, pythons, abis, platforms, hasSdist, wheelCount, wheelFilenames }
+
+  function entryFor(version, type, url) {
+    let cur = versionMap.get(version);
+    if (!cur || (type === 'built' && cur.type !== 'built')) {
+      cur = { type, url, pythons: new Set(), abis: new Set(), platforms: new Set(), hasSdist: false, wheelCount: 0, wheelFilenames: [] };
+      versionMap.set(version, cur);
+    }
+    return cur;
+  }
 
   for (const a of doc.querySelectorAll('a[href]')) {
     const href = a.getAttribute('href') || '';
     const filename = decodeURIComponent(href.split('/').pop().split('#')[0]);
     if (!filename) continue;
 
-    let version = null;
+    const type = href.includes('python-upstream') ? 'mirror' : 'built';
+    const url = href.split('#')[0];
+
     if (filename.endsWith('.whl')) {
-      // wheel: name-version-pyver-abi-platform.whl — version is always index 1
+      // wheel: name-version(-build)?-python-abi-platform.whl
       const parts = filename.slice(0, -4).split('-');
-      if (parts.length >= 5) version = parts[1];
+      if (parts.length < 5) continue;
+      const version = parts[1];
+      const platform = parts[parts.length - 1];
+      const abi      = parts[parts.length - 2];
+      const python   = parts[parts.length - 3];
+      const e = entryFor(version, type, url);
+      python.split('.').forEach(p => e.pythons.add(p));
+      abi.split('.').forEach(p => e.abis.add(p));
+      platform.split('.').forEach(p => e.platforms.add(p));
+      e.wheelCount += 1;
+      if (e.wheelFilenames.length < 50) e.wheelFilenames.push(filename);
     } else if (filename.match(/\.(tar\.gz|zip)$/)) {
       // sdist: dist-version.tar.gz — find first part starting with a digit
       const base = filename.replace(/\.(tar\.gz|zip)$/, '');
       const parts = base.split('-');
       const vi = parts.findIndex(p => /^\d/.test(p));
-      if (vi >= 1) version = parts.slice(vi).join('-');
+      if (vi < 1) continue;
+      const version = parts.slice(vi).join('-');
+      const e = entryFor(version, type, url);
+      e.hasSdist = true;
     }
-    if (!version) continue;
+  }
 
-    const type = href.includes('python-upstream') ? 'mirror' : 'built';
-    const url = href.split('#')[0];
-    // Prefer 'built' over 'mirror' if both present for same version
-    if (!versionMap.has(version) || type === 'built') {
-      versionMap.set(version, { type, url });
+  // Derive grouped osArch set for compact display.
+  for (const e of versionMap.values()) {
+    e.osArchs = new Set();
+    for (const p of e.platforms) {
+      const { os, arch } = classifyPlatform(p);
+      e.osArchs.add(arch ? `${os}/${arch}` : os);
     }
   }
   return versionMap;
@@ -1691,7 +1849,23 @@ async function pypiLookup(pkg) {
       const uploadTime = files[0]?.upload_time || null;
       const vPypiUrl = files.length > 0 ? `https://pypi.org/project/${encodeURIComponent(pkg)}/${encodeURIComponent(v)}/` : null;
       const cgrInfo = cgrVersionMap.get(v);
-      return { version: v, published: uploadTime, pypiUrl: vPypiUrl, cgrTarball: cgrInfo?.url || null, cgrType: cgrInfo?.type || null };
+      return {
+        version: v,
+        published: uploadTime,
+        pypiUrl: vPypiUrl,
+        cgrTarball: cgrInfo?.url || null,
+        cgrType: cgrInfo?.type || null,
+        cgrPlatforms: cgrInfo ? {
+          pythonsTxt:   compactPyVersions(cgrInfo.pythons),
+          platformsTxt: compactPlatforms(cgrInfo.osArchs),
+          osArchsList:  [...cgrInfo.osArchs],
+          rawPlatforms: [...cgrInfo.platforms].sort(),
+          rawPythons:   [...cgrInfo.pythons].sort(),
+          hasSdist:     cgrInfo.hasSdist,
+          wheelCount:   cgrInfo.wheelCount,
+          wheelFilenames: cgrInfo.wheelFilenames,
+        } : null,
+      };
     }),
     pypiError: pypiRes.status === 'rejected' ? pypiRes.reason : null,
     cgrError:  cgrRes.status  === 'rejected' ? cgrRes.reason  : null,
@@ -1725,6 +1899,41 @@ function pypiRenderBanners(pypiError, cgrError, pkg) {
   }
 }
 
+function pypiPlatformsCell(p) {
+  if (!p) return '<span style="color:#cbd5e1">—</span>';
+  const sdistOnly = p.hasSdist && p.wheelCount === 0;
+
+  // Cell body — two lines (Python on top, OS/arch on bottom), or single
+  // "Source only" line if no wheels.
+  let body;
+  if (sdistOnly) {
+    body = `<span class="pp-py">Source only</span><span class="pp-os">compiled at install time</span>`;
+  } else {
+    const osLine = p.platformsTxt + (p.hasSdist ? ' (+ source)' : '');
+    body = `<span class="pp-py">${escHtml(p.pythonsTxt || '—')}</span><span class="pp-os">${escHtml(osLine || '—')}</span>`;
+  }
+
+  // Tooltip — only info NOT already on the cell.
+  const osFamilies = new Set([...(p.osArchsList || [])].map(oa => oa.split('/')[0]));
+  if (sdistOnly) osFamilies.clear();
+  const explanations = [...osFamilies]
+    .filter(os => PLATFORM_HELP[os])
+    .map(os => `• ${os}: ${PLATFORM_HELP[os].replace(/^[a-z]+ — /i, '')}`);
+
+  const tipLines = [];
+  if (p.wheelCount) tipLines.push(`${p.wheelCount} pre-built wheel${p.wheelCount === 1 ? '' : 's'}${p.hasSdist ? ' (+ source distribution)' : ''}`);
+  else if (p.hasSdist) tipLines.push('Source-only — pip will compile it during install.');
+  if (explanations.length) { tipLines.push(''); tipLines.push(...explanations); }
+  if (p.rawPythons.length || p.rawPlatforms.length) {
+    tipLines.push('');
+    tipLines.push('Raw PEP 425 tags:');
+    if (p.rawPythons.length)   tipLines.push(`  python:   ${p.rawPythons.join(', ')}`);
+    if (p.rawPlatforms.length) tipLines.push(`  platform: ${p.rawPlatforms.join(', ')}`);
+  }
+
+  return `<span class="pypi-platforms" data-tip="${escHtml(tipLines.join('\n'))}">${body}</span>`;
+}
+
 function pypiRenderTable(data) {
   const { name, latest, rows: allRows } = data;
   const el = document.getElementById('pypi-results');
@@ -1756,7 +1965,7 @@ function pypiRenderTable(data) {
       </div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Version</th><th>Published</th><th style="text-align:center">PyPI</th><th style="text-align:center">Chainguard</th></tr></thead>
+      <thead><tr><th>Version</th><th>Published</th><th style="text-align:center">PyPI</th><th style="text-align:center">Chainguard</th><th>CGR platforms</th></tr></thead>
       <tbody>`;
 
   for (const row of rows) {
@@ -1766,6 +1975,7 @@ function pypiRenderTable(data) {
     html += `<td class="date-cell">${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
     html += `<td class="check-cell">${checkCell(row.pypiUrl)}</td>`;
     html += `<td class="check-cell">${cgrCheckCell(row.cgrType, row.cgrTarball)}</td>`;
+    html += `<td>${pypiPlatformsCell(row.cgrPlatforms)}</td>`;
     html += `</tr>`;
   }
   html += `</tbody></table></div>`;
