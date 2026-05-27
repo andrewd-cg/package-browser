@@ -1946,8 +1946,11 @@ function pypiRenderTable(data) {
 
   const total     = rows.length;
   const pypiCount = rows.filter(r => r.pypiUrl).length;
-  const cgrBuilt  = rows.filter(r => r.cgrType === 'built').length;
-  const cgrMirror = rows.filter(r => r.cgrType === 'mirror').length;
+  // "Covered" requires a pre-built wheel — an sdist-only row means pip will
+  // compile locally and isn't real binary coverage.
+  const hasCgrWheel = r => (r.cgrPlatforms?.wheelCount || 0) > 0;
+  const cgrBuilt  = rows.filter(r => r.cgrType === 'built'  && hasCgrWheel(r)).length;
+  const cgrMirror = rows.filter(r => r.cgrType === 'mirror' && hasCgrWheel(r)).length;
   const cgrCount  = cgrBuilt + cgrMirror;
   const countNote = total < allRows.length ? `showing ${total} of ${allRows.length}` : `${total} version${total !== 1 ? 's' : ''}`;
   const { cgrPct, builtPct, mirrorPct, html: statsH } = statsHtml('PyPI', pypiCount, cgrCount, total, cgrBuilt, cgrMirror);
@@ -1974,7 +1977,8 @@ function pypiRenderTable(data) {
     html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}</div></td>`;
     html += `<td class="date-cell">${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
     html += `<td class="check-cell">${checkCell(row.pypiUrl)}</td>`;
-    html += `<td class="check-cell">${cgrCheckCell(row.cgrType, row.cgrTarball)}</td>`;
+    const covered = hasCgrWheel(row);
+    html += `<td class="check-cell">${cgrCheckCell(covered ? row.cgrType : null, covered ? row.cgrTarball : null)}</td>`;
     html += `<td>${pypiPlatformsCell(row.cgrPlatforms)}</td>`;
     html += `</tr>`;
   }
@@ -1998,7 +2002,9 @@ function pypiCopyResults() {
   lines.push('Version'.padEnd(vw) + 'Published'.padEnd(dw) + 'PyPI'.padEnd(10) + 'Chainguard');
   lines.push('─'.repeat(vw + dw + 20));
   for (const row of rows) {
-    lines.push((row.version + (row.version === latest ? ' (latest)' : '')).padEnd(vw) + (row.published ? formatDate(row.published) : '—').padEnd(dw) + (row.pypiUrl ? '✓' : '✗').padEnd(10) + (!row.cgrType ? '✗' : row.cgrType === 'built' ? '✓ Built' : '✓ Mirror'));
+    const covered = (row.cgrPlatforms?.wheelCount || 0) > 0;
+    const cgrLabel = !covered ? (row.cgrPlatforms?.hasSdist ? '✗ (sdist only)' : '✗') : row.cgrType === 'built' ? '✓ Built' : '✓ Mirror';
+    lines.push((row.version + (row.version === latest ? ' (latest)' : '')).padEnd(vw) + (row.published ? formatDate(row.published) : '—').padEnd(dw) + (row.pypiUrl ? '✓' : '✗').padEnd(10) + cgrLabel);
   }
   copyToClipboard(lines.join('\n'), document.getElementById('pypi-copy-btn'));
 }
@@ -2173,7 +2179,9 @@ async function bulkRun(packages, ecosystem, versionCount, onProgress) {
 }
 
 function bulkHasCgr(row, eco) {
-  return eco === 'npm' ? !!row.cgrTarball : !!row.cgrType;
+  if (eco === 'npm') return !!row.cgrTarball;
+  // pypi: sdist alone isn't real coverage — pip would compile locally.
+  return !!row.cgrType && (row.cgrPlatforms?.wheelCount || 0) > 0;
 }
 
 function bulkRenderTable(results, versionCount, ecosystem) {
@@ -2235,7 +2243,12 @@ function bulkRenderTable(results, versionCount, ecosystem) {
           html += `<span class="cross" title="No version at this slot">—</span>`;
         } else {
           html += `<span class="bulk-ver-cell"><span class="bulk-ver-num">${escHtml(slot.version)}</span>`;
-          html += eco === 'npm' ? npmCgrCheckCell(slot.cgrTarball) : cgrCheckCell(slot.cgrType, slot.cgrTarball);
+          if (eco === 'npm') {
+            html += npmCgrCheckCell(slot.cgrTarball);
+          } else {
+            const covered = (slot.cgrPlatforms?.wheelCount || 0) > 0;
+            html += cgrCheckCell(covered ? slot.cgrType : null, covered ? slot.cgrTarball : null);
+          }
           html += `</span>`;
         }
         html += `</td>`;
