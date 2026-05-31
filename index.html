@@ -495,6 +495,18 @@
     transition: opacity 0.08s;
   }
   #app-tooltip.visible { opacity: 1; }
+  .badge-yanked {
+    background: #e2e8f0;
+    color: #475569;
+    font-size: 0.65rem;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 99px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    cursor: help;
+    border: 1px solid #cbd5e1;
+  }
   .badge-malware {
     background: #fee2e2;
     color: #991b1b;
@@ -727,17 +739,41 @@
           autocomplete="off"></textarea>
       </div>
       <div style="display:flex; align-items:center; gap:0.75rem; flex:1 1 100%; flex-wrap:wrap;">
-        <label style="font-size:0.85rem; color:#475569; white-space:nowrap;">
-          Latest versions to check:
-          <input type="number" id="bulk-version-count" value="2" min="1" max="5"
-            style="width:56px; border:1px solid #cbd5e1; border-radius:6px; padding:5px 8px; font-size:0.875rem; outline:none; margin-left:0.4rem;">
-        </label>
         <label style="font-size:0.85rem; color:#475569; white-space:nowrap; display:flex; align-items:center; gap:0.4rem;">
           Load file:
           <input type="file" id="bulk-file-input" accept=".json,.txt" style="font-size:0.82rem;">
         </label>
         <button type="submit" class="fetch-btn" id="bulk-btn">Check packages</button>
         <button type="button" class="copy-btn" onclick="bulkClear()">Clear</button>
+      </div>
+      <div style="display:flex; align-items:center; gap:0.75rem; flex:1 1 100%; flex-wrap:wrap; font-size:0.85rem; color:#475569;">
+        <span style="color:#94a3b8; font-style:italic;">Python target (applied to pypi results):</span>
+        <label>
+          Python
+          <select id="bulk-py-version" style="margin-left:0.3rem; padding:4px 8px; font-size:0.85rem; border:1px solid #cbd5e1; border-radius:6px;">
+            <option value="any">any</option>
+            <option value="cp39">3.9</option>
+            <option value="cp310">3.10</option>
+            <option value="cp311">3.11</option>
+            <option value="cp312">3.12</option>
+            <option value="cp313">3.13</option>
+            <option value="cp314">3.14</option>
+          </select>
+        </label>
+        <label>
+          Runtime
+          <select id="bulk-py-runtime" style="margin-left:0.3rem; padding:4px 8px; font-size:0.85rem; border:1px solid #cbd5e1; border-radius:6px;">
+            <option value="any">any</option>
+            <option value="Linux (glibc)/x86_64">Linux (glibc) x86_64</option>
+            <option value="Linux (glibc)/aarch64">Linux (glibc) arm64</option>
+            <option value="Linux (musl/Alpine)/x86_64">Linux (musl/Alpine) x86_64</option>
+            <option value="Linux (musl/Alpine)/aarch64">Linux (musl/Alpine) arm64</option>
+            <option value="macOS/arm64">macOS arm64</option>
+            <option value="macOS/x86_64">macOS x86_64</option>
+            <option value="Windows/amd64">Windows x86_64</option>
+            <option value="Windows/arm64">Windows arm64</option>
+          </select>
+        </label>
       </div>
     </form>
     <div class="banners" id="bulk-banners"></div>
@@ -1160,7 +1196,89 @@ function semverCompare(a, b) {
   return 0;
 }
 
+// Minimal npm semver range matcher. Handles the bulk of real-world specifiers:
+// exact, ^X.Y.Z, ~X.Y.Z, >, >=, <, <=, =, X.x / X.Y.x wildcards, * / empty,
+// space-separated AND, and || (OR). Does not implement hyphen ranges or
+// pre-release inclusion rules — typical package.json deps don't need those.
+function semverSatisfies(version, spec) {
+  if (!spec || spec === '*' || spec.trim() === '') return true;
+  const orParts = spec.split('||').map(s => s.trim()).filter(Boolean);
+  if (orParts.length > 1) return orParts.some(c => semverSatisfies(version, c));
+  const andClauses = spec.trim().split(/\s+/).filter(Boolean);
+  return andClauses.every(c => semverSatisfiesClause(version, c));
+}
+
+function semverSatisfiesClause(version, clause) {
+  if (!clause || clause === '*') return true;
+
+  // Caret / tilde — derive upper bound, lower is the base version.
+  if (clause[0] === '^' || clause[0] === '~') {
+    const op = clause[0];
+    const base = clause.slice(1).trim();
+    const parts = base.split('.').map(p => parseInt(p, 10) || 0);
+    const [maj, min, pat] = [parts[0]||0, parts[1]||0, parts[2]||0];
+    let upper;
+    if (op === '^') {
+      // ^X.Y.Z: bump first non-zero segment. ^0.2.3 → <0.3.0; ^0.0.3 → <0.0.4
+      upper = maj > 0 ? `${maj+1}.0.0` : (min > 0 ? `${maj}.${min+1}.0` : `${maj}.${min}.${pat+1}`);
+    } else {
+      // ~X.Y.Z → <X.(Y+1).0;  ~X → <(X+1).0.0
+      upper = parts.length >= 2 ? `${maj}.${min+1}.0` : `${maj+1}.0.0`;
+    }
+    return semverCompare(version, base) >= 0 && semverCompare(version, upper) < 0;
+  }
+
+  // X.x / X.Y.x / X.* wildcards.
+  if (/\.[x*]/i.test(clause)) {
+    const parts = clause.split('.');
+    const wildIdx = parts.findIndex(p => p === 'x' || p === 'X' || p === '*');
+    if (wildIdx <= 0) return true;
+    const prefix = parts.slice(0, wildIdx).map(p => parseInt(p, 10) || 0);
+    const lower  = [...prefix, 0, 0, 0].slice(0, 3).join('.');
+    const upperPrefix = [...prefix];
+    upperPrefix[upperPrefix.length - 1] += 1;
+    const upper = [...upperPrefix, 0, 0, 0].slice(0, 3).join('.');
+    return semverCompare(version, lower) >= 0 && semverCompare(version, upper) < 0;
+  }
+
+  // Plain comparison or exact.
+  const m = clause.match(/^(>=|<=|>|<|=)?\s*(.+)$/);
+  if (!m) return false;
+  const op = m[1] || '=';
+  const s  = m[2].trim();
+  const cmp = semverCompare(version, s);
+  switch (op) {
+    case '=':  return cmp === 0;
+    case '>=': return cmp >= 0;
+    case '<=': return cmp <= 0;
+    case '>':  return cmp >  0;
+    case '<':  return cmp <  0;
+  }
+  return false;
+}
+
+// Returns the version pinned by a fully-exact npm spec (or a poetry/lockfile-
+// style bare version), else null. Anything with range operators / wildcards
+// routes through semverSatisfies instead.
+function semverExactPin(spec) {
+  if (!spec) return null;
+  spec = spec.trim();
+  if (!spec) return null;
+  if (/^=\s*\S+$/.test(spec)) spec = spec.replace(/^=\s*/, '');
+  if (/[\s^~|<>=*xX]/.test(spec)) return null;
+  return spec;
+}
+
+function npmNormalizeRequested(rawSpec) {
+  if (!rawSpec) return { exact: null, spec: '' };
+  return { exact: semverExactPin(rawSpec), spec: rawSpec };
+}
+
 async function npmLookup(pkg) {
+  // Normalize: trim whitespace and strip trailing slashes. CGR's javascript
+  // registry returns mangled tarball URLs (with `//` and a slash-in-filename)
+  // when the request path has a trailing slash, even though it 200s.
+  pkg = pkg.trim().replace(/\/+$/, '');
   const { user, pass } = getCreds('npm');
   const npmUrl = `https://registry.npmjs.org/${encodeURIComponent(pkg)}`;
   const cgrUrl = `/api/cgr/${encodeURIComponent(pkg)}`;
@@ -1190,7 +1308,12 @@ async function npmLookup(pkg) {
     else malByVersion.set(m.version, m);
   }
 
-  const allVersions = new Set([...Object.keys(npmVersions), ...Object.keys(cgrVersions)]);
+  // Versions present in `time` but absent from `versions` are unpublished/yanked
+  // from npm — recover them so malicious-but-removed releases stay visible.
+  const TIME_NON_VERSION_KEYS = new Set(['created', 'modified', 'unpublished']);
+  const timeVersions = Object.keys(npmTime).filter(k => !TIME_NON_VERSION_KEYS.has(k));
+
+  const allVersions = new Set([...Object.keys(npmVersions), ...Object.keys(cgrVersions), ...timeVersions]);
   const sorted = [...allVersions].sort(semverCompare).reverse();
 
   return {
@@ -1201,6 +1324,7 @@ async function npmLookup(pkg) {
       published: npmTime[v] || null,
       npmTarball: npmVersions[v]?.dist?.tarball || null,
       cgrTarball: cgrVersions[v]?.dist?.tarball || null,
+      isYanked: !!(npmTime[v] && !npmVersions[v]),
       hasInstallScripts: !!(npmVersions[v]?.scripts && Object.keys(npmVersions[v].scripts).some(k => ['preinstall', 'install', 'postinstall'].includes(k))),
       malware: malByVersion.get(v) || (malPackageWide[0] ? { ...malPackageWide[0], _packageWide: true } : null),
     })),
@@ -1273,7 +1397,7 @@ function npmRenderTable(data) {
   for (const [idx, row] of rows.entries()) {
     const isLatest = row.version === latest;
     html += `<tr${isLatest ? ' class="latest"' : ''}>`;
-    html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}${row.hasInstallScripts ? '<span class="badge-scripts" title="Has install lifecycle scripts (preinstall/install/postinstall)">scripts</span>' : ''}${malwareBadgeHtml(row.malware)}</div></td>`;
+    html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}${row.hasInstallScripts ? '<span class="badge-scripts" title="Has install lifecycle scripts (preinstall/install/postinstall)">scripts</span>' : ''}${row.isYanked ? '<span class="badge-yanked" title="Unpublished/yanked from npmjs.com — only visible because it still appears in the registry\'s time index">yanked</span>' : ''}${malwareBadgeHtml(row.malware)}</div></td>`;
     html += `<td class="date-cell">${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
     html += `<td class="check-cell check-cell-left"><div class="check-and-prov">${checkCell(row.npmTarball)}<span id="npm-att-${idx}"></span></div></td>`;
     html += `<td class="check-cell check-cell-left"><div class="check-and-prov">${npmCgrCheckCell(row.cgrTarball)}<span id="cgr-att-${idx}"></span>${npmCgrBadge(row.cgrTarball)}</div></td>`;
@@ -1689,6 +1813,61 @@ function pypiVersionCompare(a, b) {
   return 0;
 }
 
+// Minimal PEP 440 spec evaluator. Handles ==, !=, >, >=, <, <=, ~=, ===, and
+// comma-joined compound clauses. Wildcards (==1.0.*) and prerelease semantics
+// are intentionally simplified — enough to cover typical requirements.txt pins.
+function pypiSatisfiesSpec(version, spec) {
+  if (!spec) return true;
+  return spec.split(',').map(s => s.trim()).filter(Boolean).every(c => pypiSatisfiesClause(version, c));
+}
+
+function pypiSatisfiesClause(version, clause) {
+  const m = clause.match(/^(===|==|>=|<=|>|<|!=|~=)\s*(.+)$/);
+  if (!m) return true;
+  const op = m[1];
+  let s = m[2].trim();
+
+  if ((op === '==' || op === '!=') && s.endsWith('.*')) {
+    const prefix = s.slice(0, -2);
+    const isMatch = version === prefix || version.startsWith(prefix + '.') || version.startsWith(prefix + 'a') || version.startsWith(prefix + 'b') || version.startsWith(prefix + 'rc');
+    return op === '==' ? isMatch : !isMatch;
+  }
+  if (op === '===') return version === s;
+
+  const cmp = pypiVersionCompare(version, s);
+  switch (op) {
+    case '==':  return cmp === 0;
+    case '!=':  return cmp !== 0;
+    case '>=':  return cmp >= 0;
+    case '<=':  return cmp <= 0;
+    case '>':   return cmp >  0;
+    case '<':   return cmp <  0;
+    case '~=': {
+      // ~=X.Y[.Z]: equivalent to >=X.Y[.Z], <X.(Y+1) (drop last segment, bump prev).
+      const parts = s.split('.');
+      if (parts.length < 2) return false;
+      const upperParts = parts.slice(0, -1);
+      upperParts[upperParts.length - 1] = String(parseInt(upperParts[upperParts.length - 1], 10) + 1);
+      const upper = upperParts.join('.');
+      return cmp >= 0 && pypiVersionCompare(version, upper) < 0;
+    }
+  }
+  return false;
+}
+
+// Extract the exact pinned version from a requirements.txt-style spec, or null.
+// e.g. "==2.31.0" → "2.31.0";  "===2.31.0" → "2.31.0";  ">=2.0,<3.0" → null
+function pypiExactPin(spec) {
+  if (!spec) return null;
+  const clauses = spec.split(',').map(s => s.trim()).filter(Boolean);
+  if (clauses.length !== 1) return null;
+  const m = clauses[0].match(/^={2,3}\s*(\S+)$/);
+  if (!m) return null;
+  const v = m[1].trim();
+  if (v.includes('*')) return null; // wildcards (==1.0.*) are range-mode, not exact
+  return v;
+}
+
 function pypiIsPrerelease(v) {
   return /\.(dev|a|alpha|b|beta|rc|c)\d*/i.test(v) || /[^.]a\d/i.test(v) || /[^.]b\d/i.test(v) || /rc\d/i.test(v) || /alpha/i.test(v) || /beta/i.test(v);
 }
@@ -1723,27 +1902,34 @@ function classifyPlatform(p) {
   return { os: p, arch: null };
 }
 
-// Turn the set of PEP 425 python tags into "Python 3.11–3.14" style copy.
+// Turn the set of PEP 425 python tags into "Python 3.9–3.14" style copy.
 function compactPyVersions(pythons) {
-  const minor = tag => parseInt(tag.match(/^[a-z]p?(\d)(\d+)$/i)?.[2] ?? '0', 10);
-  const major = tag => parseInt(tag.match(/^[a-z]p?(\d)(\d+)$/i)?.[1] ?? '0', 10);
+  // Parse `cp310` → {major:3, minor:10}. Keeps major/minor numeric so sorts
+  // correctly — string-based sort or parseFloat both mis-rank 3.10 vs 3.9.
+  const parse = tag => {
+    const m = tag.match(/^[a-z]p?(\d)(\d+)$/i);
+    return m ? { major: +m[1], minor: +m[2] } : null;
+  };
+  const cmp = (a, b) => a.major - b.major || a.minor - b.minor;
+  const fmt = v => `${v.major}.${v.minor}`;
+  const rangeOrSingle = (vs, label) => {
+    if (!vs.length) return null;
+    const lo = vs[0], hi = vs[vs.length - 1];
+    return cmp(lo, hi) === 0 ? `${label} ${fmt(lo)}` : `${label} ${fmt(lo)}–${fmt(hi)}`;
+  };
 
-  const cpyMinors = [...pythons].filter(p => /^cp\d+$/.test(p)).map(p => `${major(p)}.${minor(p)}`).sort((a, b) => parseFloat(a) - parseFloat(b));
-  const pypyMinors = [...pythons].filter(p => /^pp\d+$/.test(p)).map(p => `${major(p)}.${minor(p)}`).sort((a, b) => parseFloat(a) - parseFloat(b));
-  const generic    = [...pythons].filter(p => /^py\d+$/.test(p)).sort();
+  const cpyVers  = [...pythons].filter(p => /^cp\d+$/.test(p)).map(parse).filter(Boolean).sort(cmp);
+  const pypyVers = [...pythons].filter(p => /^pp\d+$/.test(p)).map(parse).filter(Boolean).sort(cmp);
+  const generic  = [...pythons].filter(p => /^py\d+$/.test(p)).sort();
 
   const out = [];
-  if (cpyMinors.length) {
-    const lo = cpyMinors[0], hi = cpyMinors[cpyMinors.length - 1];
-    out.push(lo === hi ? `Python ${lo}` : `Python ${lo}–${hi}`);
-  } else if (generic.length) {
+  if (cpyVers.length) out.push(rangeOrSingle(cpyVers, 'Python'));
+  else if (generic.length) {
     if (generic.length === 1 && generic[0] === 'py3') out.push('Python 3.x');
-    else out.push(`Python ${generic.map(t => `${major(t)}.${minor(t) || 'x'}`).join(', ')}`);
+    else out.push(`Python ${generic.map(t => { const v = parse(t); return v ? fmt(v) : t; }).join(', ')}`);
   }
-  if (pypyMinors.length) {
-    const lo = pypyMinors[0], hi = pypyMinors[pypyMinors.length - 1];
-    out.push(lo === hi ? `PyPy ${lo}` : `PyPy ${lo}–${hi}`);
-  }
+  if (pypyVers.length) out.push(rangeOrSingle(pypyVers, 'PyPy'));
+
   return out.join(' + ');
 }
 
@@ -1769,7 +1955,7 @@ function parseCgrSimpleIndex(html) {
   function entryFor(version, type, url) {
     let cur = versionMap.get(version);
     if (!cur || (type === 'built' && cur.type !== 'built')) {
-      cur = { type, url, pythons: new Set(), abis: new Set(), platforms: new Set(), hasSdist: false, wheelCount: 0, wheelFilenames: [] };
+      cur = { type, url, pythons: new Set(), abis: new Set(), platforms: new Set(), hasSdist: false, wheelCount: 0, wheelFilenames: [], wheels: [] };
       versionMap.set(version, cur);
     }
     return cur;
@@ -1797,6 +1983,13 @@ function parseCgrSimpleIndex(html) {
       platform.split('.').forEach(p => e.platforms.add(p));
       e.wheelCount += 1;
       if (e.wheelFilenames.length < 50) e.wheelFilenames.push(filename);
+      // Per-wheel tuples for "is there a wheel matching cp312 AND musllinux x86_64?" queries.
+      for (const py of python.split('.')) {
+        for (const pl of platform.split('.')) {
+          const c = classifyPlatform(pl);
+          e.wheels.push({ python: py, platform: pl, osArch: c.arch ? `${c.os}/${c.arch}` : c.os });
+        }
+      }
     } else if (filename.match(/\.(tar\.gz|zip)$/)) {
       // sdist: dist-version.tar.gz — find first part starting with a digit
       const base = filename.replace(/\.(tar\.gz|zip)$/, '');
@@ -1821,6 +2014,7 @@ function parseCgrSimpleIndex(html) {
 }
 
 async function pypiLookup(pkg) {
+  pkg = pkg.trim().replace(/\/+$/, '');
   const { user, pass } = getCreds('pypi');
   const pypiUrl = `https://pypi.org/pypi/${encodeURIComponent(pkg)}/json`;
   const cgrUrl  = `/api/cgr-python/simple/${encodeURIComponent(pkg)}/`;
@@ -1864,6 +2058,7 @@ async function pypiLookup(pkg) {
           hasSdist:     cgrInfo.hasSdist,
           wheelCount:   cgrInfo.wheelCount,
           wheelFilenames: cgrInfo.wheelFilenames,
+          wheels:       cgrInfo.wheels,
         } : null,
       };
     }),
@@ -2056,6 +2251,13 @@ function parseRequirementsTxt(text) {
     line = line.replace(/#.*$/, '').trim();
     if (!line) continue;
     if (/^(-r|-e|--)\s/.test(line)) continue;
+    // PEP 508 environment marker: "pkg==1.0 ; python_version >= '3.10'"
+    line = line.split(';')[0].trim();
+    // pip-compile --hash=sha256:... continuations
+    line = line.replace(/\s*--hash=\S+/g, '').trim();
+    // Trailing backslash from line-continuations
+    line = line.replace(/\\\s*$/, '').trim();
+    if (!line) continue;
     const withoutExtras = line.replace(/\[.*?\]/, '');
     const verMatch = withoutExtras.match(/\s*([><=!~^].*)$/);
     const requestedVersion = verMatch ? verMatch[1].trim() : '';
@@ -2158,7 +2360,7 @@ async function runWithConcurrency(items, limit, fn) {
   return results;
 }
 
-async function bulkRun(packages, ecosystem, versionCount, onProgress) {
+async function bulkRun(packages, ecosystem, onProgress) {
   const lookup = ecosystem === 'npm' ? npmLookup : pypiLookup;
   let done = 0;
   return runWithConcurrency(packages, 5, async ({ name, requestedVersion }) => {
@@ -2166,14 +2368,17 @@ async function bulkRun(packages, ecosystem, versionCount, onProgress) {
       const data = await lookup(name);
       done++;
       onProgress(done, packages.length);
-      const stableRows = ecosystem === 'npm'
-        ? data.rows.filter(r => !r.version.includes('-'))
-        : data.rows.filter(r => !pypiIsPrerelease(r.version));
-      return { pkg: name, requestedVersion, slots: stableRows.slice(0, versionCount), error: null, ecosystem };
+      return {
+        pkg: name, requestedVersion,
+        // Full version list (incl. prereleases) so exact-pin resolution can hit
+        // any version the user asked for, not just the top N stable.
+        allRows: data.rows,
+        error: null, ecosystem,
+      };
     } catch (err) {
       done++;
       onProgress(done, packages.length);
-      return { pkg: name, requestedVersion, slots: [], error: err.message, ecosystem };
+      return { pkg: name, requestedVersion, allRows: null, error: err.message, ecosystem };
     }
   });
 }
@@ -2184,82 +2389,268 @@ function bulkHasCgr(row, eco) {
   return !!row.cgrType && (row.cgrPlatforms?.wheelCount || 0) > 0;
 }
 
-function bulkRenderTable(results, versionCount, ecosystem) {
+// One-decimal percentage that truncates instead of rounding up — so 99.x stays
+// 99.x and only an actual 100/100 displays as 100.0.
+function bulkPct(num, denom) {
+  if (!denom) return '0.0';
+  if (num === denom) return '100.0';
+  return (Math.floor(num / denom * 1000) / 10).toFixed(1);
+}
+
+// True if a wheel's python tag satisfies the user's Python filter, per PEP 425
+// compatibility rules (not just string equality):
+//   - py3 / py2          → universal across major version (any cp3x / pp3x for py3)
+//   - pyNM (e.g. py32)   → minimum version (matches cp3X where X >= M)
+//   - cpNM / ppNM        → exact CPython/PyPy version
+function pythonTagSatisfies(wheelPy, filter) {
+  if (filter === 'any') return true;
+  if (wheelPy === filter) return true;
+
+  const fMatch = filter.match(/^(cp|pp)(\d)(\d+)$/);
+  if (!fMatch) return false;
+  const fMajor = +fMatch[2], fMinor = +fMatch[3];
+
+  // py3 → matches any cp3x / pp3x
+  let m = wheelPy.match(/^py(\d)$/);
+  if (m) return +m[1] === fMajor;
+  // pyNM → minimum version (e.g. py32 → cp3X where X >= 2)
+  m = wheelPy.match(/^py(\d)(\d+)$/);
+  if (m) return +m[1] === fMajor && +m[2] <= fMinor;
+
+  return false;
+}
+
+// True if a wheel's platform tag satisfies the user's runtime filter.
+// `any` platform (pure-Python wheel) always matches; otherwise compare osArch.
+function runtimeTagSatisfies(wheelPlatform, wheelOsArch, filter) {
+  if (filter === 'any') return true;
+  if (wheelPlatform === 'any') return true;
+  return wheelOsArch === filter;
+}
+
+// True if at least one wheel of this CGR version matches the user's Python+runtime filter.
+function pypiRowMatchesFilter(row, pyFilter, rtFilter) {
+  const wheels = row.cgrPlatforms?.wheels || [];
+  if (!wheels.length) return false;
+  for (const w of wheels) {
+    if (!pythonTagSatisfies(w.python, pyFilter)) continue;
+    if (!runtimeTagSatisfies(w.platform, w.osArch, rtFilter)) continue;
+    return true;
+  }
+  return false;
+}
+
+// Decide how to interpret the parser's `requestedVersion` for a pypi package.
+// - "" → no spec  → range-mode treating everything as a match
+// - "==X" / "===X" → exact pin
+// - "X.Y.Z" (bare, poetry.lock) → exact pin
+// - ">=…" / "~=…" / mixed → range spec
+function pypiNormalizeRequested(rawSpec) {
+  if (!rawSpec) return { exact: null, spec: '' };
+  if (/^[<>=!~]/.test(rawSpec)) {
+    return { exact: pypiExactPin(rawSpec), spec: rawSpec };
+  }
+  return { exact: rawSpec, spec: `==${rawSpec}` };
+}
+
+// Within `rows` (all CGR versions for a package), pick the match row (exact
+// version, or latest in range) and a suggested upgrade row when no match.
+// Generic across ecosystems: the caller supplies the coverage gate, version
+// comparator, and range-satisfies predicate.
+function resolveMatchAndUpgrade(rows, normalized, hasCoverage, compare, satisfies) {
+  const candidates = rows.filter(hasCoverage);
+  if (!candidates.length) return { match: null, upgrade: null };
+
+  const { exact, spec } = normalized;
+
+  if (exact) {
+    const exactRow = candidates.find(r => r.version === exact);
+    if (exactRow) return { match: exactRow, upgrade: null };
+    const above = candidates.filter(r => compare(r.version, exact) > 0);
+    const below = candidates.filter(r => compare(r.version, exact) < 0);
+    above.sort((a, b) => compare(a.version, b.version));   // smallest upgrade first
+    below.sort((a, b) => compare(b.version, a.version));   // largest fallback first
+    return { match: null, upgrade: above[0] || below[0] || null };
+  }
+
+  const inRange = candidates.filter(r => satisfies(r.version, spec));
+  inRange.sort((a, b) => compare(b.version, a.version));   // latest in range first
+  return { match: inRange[0] || null, upgrade: null };
+}
+
+function bulkRenderTable(results, _unused, ecosystem) {
   const el = document.getElementById('bulk-results');
   if (!results.length) {
     el.innerHTML = `<div class="status-placeholder">No packages found.</div>`;
     return;
   }
+  if (ecosystem === 'pypi') return bulkRenderPypi(results, el);
+  return bulkRenderNpm(results, el);
+}
 
-  const total = results.length;
-  const withLatest = results.filter(r => r.slots.length > 0 && bulkHasCgr(r.slots[0], ecosystem)).length;
-  const withAny    = results.filter(r => r.slots.some(s => bulkHasCgr(s, ecosystem))).length;
-  const latestPct  = total ? Math.round(withLatest / total * 100) : 0;
-  const anyPct     = total ? Math.round(withAny / total * 100) : 0;
+function bulkRenderNpm(results, el) {
+  const ecosystem = 'npm';
+  const hasCoverage = r => !!r.cgrTarball;
+  const resolved = results.map(r => {
+    if (r.error || !r.allRows) return { ...r, normalized: null, match: null, upgrade: null };
+    const normalized = npmNormalizeRequested(r.requestedVersion);
+    const { match, upgrade } = resolveMatchAndUpgrade(r.allRows, normalized, hasCoverage, semverCompare, semverSatisfies);
+    return { ...r, normalized, match, upgrade };
+  });
 
-  const slotLabels = Array.from({ length: versionCount }, (_, i) => i === 0 ? 'Latest' : `N-${i}`);
-
-  let latestBuilt = 0, latestMirror = 0, builtPct = 0, mirrorPct = 0;
-  if (ecosystem === 'npm') {
-    latestBuilt  = results.filter(r => r.slots.length > 0 && r.slots[0].cgrTarball && !r.slots[0].cgrTarball.includes('javascript-upstream')).length;
-    latestMirror = results.filter(r => r.slots.length > 0 && r.slots[0].cgrTarball &&  r.slots[0].cgrTarball.includes('javascript-upstream')).length;
-    builtPct  = withLatest ? Math.round(latestBuilt  / withLatest * 100) : 0;
-    mirrorPct = withLatest ? Math.round(latestMirror / withLatest * 100) : 0;
-  }
+  const total = resolved.length;
+  const matched = resolved.filter(r => r.match).length;
+  const matchedBuilt  = resolved.filter(r => r.match && !r.match.cgrTarball.includes('javascript-upstream')).length;
+  const matchedMirror = resolved.filter(r => r.match &&  r.match.cgrTarball.includes('javascript-upstream')).length;
+  const upgradeable = resolved.filter(r => !r.match && r.upgrade).length;
+  const uncovered = total - matched - upgradeable - resolved.filter(r => r.error).length;
+  const matchedPct = bulkPct(matched, total);
+  const builtPct   = bulkPct(matchedBuilt,  matched);
+  const mirrorPct  = bulkPct(matchedMirror, matched);
 
   let html = `<div class="bulk-summary-header">`;
-  html += `<div class="results-title"><span class="pkg-name">${escHtml(ecosystem === 'npm' ? 'npm' : 'pypi')}</span><span class="count">${total} package${total !== 1 ? 's' : ''}</span></div>`;
+  html += `<div class="results-title"><span class="pkg-name">npm</span><span class="count">${total} package${total !== 1 ? 's' : ''}</span></div>`;
   html += `<div class="header-right"><div class="stats-row">`;
   html += `<div class="stat-block"><span class="stat-label">Packages</span><span class="stat-value">${total}</span></div>`;
   html += `<div class="stat-divider"></div>`;
-  html += `<div class="stat-block"><span class="stat-label">Latest in CGR</span><span class="stat-value">${withLatest} <span class="stat-pct">${latestPct}%</span></span></div>`;
-  if (ecosystem === 'npm') {
-    html += `<div class="stat-block stat-sub"><span class="stat-label">Built</span><span class="stat-value">${latestBuilt} <span class="stat-pct built">${builtPct}%</span></span></div>`;
-    html += `<div class="stat-block stat-sub"><span class="stat-label">Mirrored</span><span class="stat-value">${latestMirror} <span class="stat-pct mirror">${mirrorPct}%</span></span></div>`;
-  }
-  if (versionCount > 1) {
-    html += `<div class="stat-divider"></div>`;
-    html += `<div class="stat-block"><span class="stat-label">N-1 or later in CGR</span><span class="stat-value">${withAny} <span class="stat-pct">${anyPct}%</span></span></div>`;
-  }
+  html += `<div class="stat-block"><span class="stat-label">Match in CGR</span><span class="stat-value">${matched} <span class="stat-pct">${matchedPct}%</span></span></div>`;
+  html += `<div class="stat-block stat-sub"><span class="stat-label">Built</span><span class="stat-value">${matchedBuilt} <span class="stat-pct built">${builtPct}%</span></span></div>`;
+  html += `<div class="stat-block stat-sub"><span class="stat-label">Mirrored</span><span class="stat-value">${matchedMirror} <span class="stat-pct mirror">${mirrorPct}%</span></span></div>`;
+  html += `<div class="stat-block stat-sub"><span class="stat-label">Upgrade avail.</span><span class="stat-value">${upgradeable}</span></div>`;
+  html += `<div class="stat-block stat-sub"><span class="stat-label">No coverage</span><span class="stat-value">${uncovered}</span></div>`;
   html += `</div></div></div>`;
 
   html += `<div class="table-wrap"><table class="bulk-table">`;
-  html += `<thead><tr><th>Package</th><th style="color:#94a3b8;font-weight:500">Requested</th>`;
-  for (const label of slotLabels) html += `<th class="ver-slot-th" style="text-align:left">${escHtml(label)}</th>`;
-  html += `</tr></thead><tbody>`;
+  html += `<thead><tr>
+    <th>Package</th>
+    <th style="color:#94a3b8;font-weight:500">Requested</th>
+    <th class="ver-slot-th" style="text-align:left">Match in CGR</th>
+    <th class="ver-slot-th" style="text-align:left">Suggested upgrade</th>
+  </tr></thead><tbody>`;
 
-  for (const { pkg, requestedVersion, slots, error, ecosystem: eco } of results) {
-    const pkgTab = eco === 'npm' ? 'npm' : 'pypi';
+  for (const r of resolved) {
+    const { pkg, requestedVersion, error, normalized, match, upgrade } = r;
     html += `<tr>`;
-    html += `<td><a href="#" class="pkg-name" style="font-family:'SFMono-Regular',Consolas,monospace;font-size:0.85rem;" onclick="event.preventDefault();bulkDrillDown('${escHtml(pkg)}','${escHtml(pkgTab)}')">${escHtml(pkg)}</a></td>`;
+    html += `<td><a href="#" class="pkg-name" style="font-family:'SFMono-Regular',Consolas,monospace;font-size:0.85rem;" onclick="event.preventDefault();bulkDrillDown('${escHtml(pkg)}','npm')">${escHtml(pkg)}</a></td>`;
     html += `<td><span class="bulk-requested">${requestedVersion ? escHtml(requestedVersion) : '<span style="color:#e2e8f0">—</span>'}</span></td>`;
+
     if (error) {
-      html += `<td class="ver-slot" colspan="${versionCount}" style="color:#f87171;font-size:0.82rem;">Error: ${escHtml(error)}</td>`;
+      html += `<td class="ver-slot" colspan="2" style="color:#f87171;font-size:0.82rem;">Error: ${escHtml(error)}</td>`;
     } else {
-      for (let i = 0; i < versionCount; i++) {
-        const slot = slots[i];
-        html += `<td class="ver-slot">`;
-        if (!slot) {
-          html += `<span class="cross" title="No version at this slot">—</span>`;
-        } else {
-          html += `<span class="bulk-ver-cell"><span class="bulk-ver-num">${escHtml(slot.version)}</span>`;
-          if (eco === 'npm') {
-            html += npmCgrCheckCell(slot.cgrTarball);
-          } else {
-            const covered = (slot.cgrPlatforms?.wheelCount || 0) > 0;
-            html += cgrCheckCell(covered ? slot.cgrType : null, covered ? slot.cgrTarball : null);
-          }
-          html += `</span>`;
-        }
-        html += `</td>`;
+      html += `<td class="ver-slot">`;
+      if (match) {
+        html += `<span class="bulk-ver-cell"><span class="bulk-ver-num">${escHtml(match.version)}</span>`;
+        html += npmCgrCheckCell(match.cgrTarball);
+        if (normalized && !normalized.exact) html += `<span style="font-size:0.7rem;color:#64748b;margin-left:0.3rem;">latest in range</span>`;
+        html += `</span>`;
+      } else {
+        html += `<span class="cross" title="No CGR version matches">✗</span>`;
       }
+      html += `</td><td class="ver-slot">`;
+      if (match) html += `<span style="color:#cbd5e1">—</span>`;
+      else if (upgrade) {
+        html += `<span class="bulk-ver-cell"><span class="bulk-ver-num">${escHtml(upgrade.version)}</span>`;
+        html += npmCgrCheckCell(upgrade.cgrTarball);
+        html += `</span>`;
+      } else {
+        html += `<span style="color:#cbd5e1">—</span>`;
+      }
+      html += `</td>`;
     }
     html += `</tr>`;
   }
-
   html += `</tbody></table></div>`;
   el.innerHTML = html;
-  state.bulk.lastData = { results, versionCount, ecosystem };
+  state.bulk.lastData = { results, ecosystem };
+}
+
+function bulkRenderPypi(results, el) {
+  const pyFilter = document.getElementById('bulk-py-version').value;
+  const rtFilter = document.getElementById('bulk-py-runtime').value;
+  const filterLabel = (pyFilter === 'any' ? 'any Python' : `Python ${pyFilter.replace(/^[a-z]+/,'').replace(/(\d)(\d+)/, '$1.$2')}`)
+    + ' · ' + (rtFilter === 'any' ? 'any runtime' : rtFilter.replace('/', ' '));
+
+  // For each result, resolve match and upgrade based on the user's pin/spec.
+  const hasCoverage = r => (r.cgrPlatforms?.wheelCount || 0) > 0;
+  const resolved = results.map(r => {
+    if (r.error || !r.allRows) return { ...r, normalized: null, match: null, upgrade: null };
+    const normalized = pypiNormalizeRequested(r.requestedVersion);
+    const filtered = r.allRows.filter(row => pypiRowMatchesFilter(row, pyFilter, rtFilter));
+    const { match, upgrade } = resolveMatchAndUpgrade(filtered, normalized, hasCoverage, pypiVersionCompare, pypiSatisfiesSpec);
+    return { ...r, normalized, match, upgrade };
+  });
+
+  const total = resolved.length;
+  const matched = resolved.filter(r => r.match).length;
+  const upgradeable = resolved.filter(r => !r.match && r.upgrade).length;
+  const uncovered = total - matched - upgradeable - resolved.filter(r => r.error).length;
+  const matchedPct = bulkPct(matched, total);
+
+  let html = `<div class="bulk-summary-header">`;
+  html += `<div class="results-title"><span class="pkg-name">pypi</span><span class="count">${total} package${total !== 1 ? 's' : ''} · ${escHtml(filterLabel)}</span></div>`;
+  html += `<div class="header-right"><div class="stats-row">`;
+  html += `<div class="stat-block"><span class="stat-label">Packages</span><span class="stat-value">${total}</span></div>`;
+  html += `<div class="stat-divider"></div>`;
+  html += `<div class="stat-block"><span class="stat-label">Match in CGR</span><span class="stat-value">${matched} <span class="stat-pct">${matchedPct}%</span></span></div>`;
+  html += `<div class="stat-block stat-sub"><span class="stat-label">Upgrade avail.</span><span class="stat-value">${upgradeable}</span></div>`;
+  html += `<div class="stat-block stat-sub"><span class="stat-label">No coverage</span><span class="stat-value">${uncovered}</span></div>`;
+  html += `</div></div></div>`;
+
+  html += `<div class="table-wrap"><table class="bulk-table">`;
+  html += `<thead><tr>
+    <th>Package</th>
+    <th style="color:#94a3b8;font-weight:500">Requested</th>
+    <th class="ver-slot-th" style="text-align:left">Match in CGR</th>
+    <th class="ver-slot-th" style="text-align:left">Suggested upgrade</th>
+    <th style="text-align:left">CGR platforms</th>
+  </tr></thead><tbody>`;
+
+  for (const r of resolved) {
+    const { pkg, requestedVersion, error, normalized, match, upgrade } = r;
+    html += `<tr>`;
+    html += `<td><a href="#" class="pkg-name" style="font-family:'SFMono-Regular',Consolas,monospace;font-size:0.85rem;" onclick="event.preventDefault();bulkDrillDown('${escHtml(pkg)}','pypi')">${escHtml(pkg)}</a></td>`;
+    html += `<td><span class="bulk-requested">${requestedVersion ? escHtml(requestedVersion) : '<span style="color:#e2e8f0">—</span>'}</span></td>`;
+
+    if (error) {
+      html += `<td class="ver-slot" colspan="3" style="color:#f87171;font-size:0.82rem;">Error: ${escHtml(error)}</td>`;
+    } else {
+      // Match column.
+      html += `<td class="ver-slot">`;
+      if (match) {
+        const isExact = normalized?.exact && match.version === normalized.exact;
+        html += `<span class="bulk-ver-cell"><span class="bulk-ver-num">${escHtml(match.version)}</span>`;
+        html += cgrCheckCell(match.cgrType, match.cgrTarball);
+        if (!isExact && normalized?.spec && !normalized.exact) {
+          html += `<span style="font-size:0.7rem;color:#64748b;margin-left:0.3rem;">latest in range</span>`;
+        }
+        html += `</span>`;
+      } else {
+        html += `<span class="cross" title="No CGR wheel matches the requested version + filter">✗</span>`;
+      }
+      html += `</td>`;
+
+      // Suggested upgrade column.
+      html += `<td class="ver-slot">`;
+      if (match) {
+        html += `<span style="color:#cbd5e1">—</span>`;
+      } else if (upgrade) {
+        html += `<span class="bulk-ver-cell"><span class="bulk-ver-num">${escHtml(upgrade.version)}</span>`;
+        html += cgrCheckCell(upgrade.cgrType, upgrade.cgrTarball);
+        html += `</span>`;
+      } else {
+        html += `<span class="cross" title="No CGR version matches the filter">—</span>`;
+      }
+      html += `</td>`;
+
+      // CGR platforms for the rendered row (match preferred, fall back to upgrade).
+      const platRow = match || upgrade;
+      html += `<td>${pypiPlatformsCell(platRow?.cgrPlatforms || null)}</td>`;
+    }
+    html += `</tr>`;
+  }
+  html += `</tbody></table></div>`;
+  el.innerHTML = html;
+  state.bulk.lastData = { results, ecosystem: 'pypi' };
 }
 
 function bulkClear() {
@@ -2301,6 +2692,16 @@ dropZone.addEventListener('drop', (e) => {
   bulkLoadFile(e.dataTransfer.files[0]);
 });
 
+// Re-render in place when the pypi filters change (no re-fetch needed).
+for (const id of ['bulk-py-version', 'bulk-py-runtime']) {
+  document.getElementById(id).addEventListener('change', () => {
+    const last = state.bulk.lastData;
+    if (last && last.ecosystem === 'pypi') {
+      bulkRenderTable(last.results, null, last.ecosystem);
+    }
+  });
+}
+
 document.getElementById('bulk-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const text = document.getElementById('bulk-input').value.trim();
@@ -2313,7 +2714,6 @@ document.getElementById('bulk-form').addEventListener('submit', async (e) => {
     return;
   }
 
-  const versionCount = Math.max(1, Math.min(5, parseInt(document.getElementById('bulk-version-count').value, 10) || 2));
   const { packages, ecosystem, format } = parsed;
   const btn = document.getElementById('bulk-btn');
   btn.disabled = true;
@@ -2333,11 +2733,11 @@ document.getElementById('bulk-form').addEventListener('submit', async (e) => {
   progressText.textContent = `Checking 0 of ${packages.length} packages (${ecosystem})…`;
 
   try {
-    const results = await bulkRun(packages, ecosystem, versionCount, (done, total) => {
+    const results = await bulkRun(packages, ecosystem, (done, total) => {
       progressFill.style.width = `${Math.round(done / total * 100)}%`;
       progressText.textContent = `Checking ${done} of ${total} packages (${ecosystem})…`;
     });
-    bulkRenderTable(results, versionCount, ecosystem);
+    bulkRenderTable(results, null, ecosystem);
   } catch (err) {
     document.getElementById('bulk-results').innerHTML =
       `<div class="status-placeholder">Unexpected error: ${escHtml(err.message)}</div>`;
