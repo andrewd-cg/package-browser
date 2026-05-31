@@ -1397,9 +1397,10 @@ function npmRenderTable(data) {
   for (const [idx, row] of rows.entries()) {
     const isLatest = row.version === latest;
     html += `<tr${isLatest ? ' class="latest"' : ''}>`;
-    html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}${row.hasInstallScripts ? '<span class="badge-scripts" title="Has install lifecycle scripts (preinstall/install/postinstall)">scripts</span>' : ''}${row.isYanked ? '<span class="badge-yanked" title="Unpublished/yanked from npmjs.com — only visible because it still appears in the registry\'s time index">yanked</span>' : ''}${malwareBadgeHtml(row.malware)}</div></td>`;
+    html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}${row.hasInstallScripts ? '<span class="badge-scripts" title="Has install lifecycle scripts (preinstall/install/postinstall)">scripts</span>' : ''}${malwareBadgeHtml(row.malware)}</div></td>`;
     html += `<td class="date-cell">${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
-    html += `<td class="check-cell check-cell-left"><div class="check-and-prov">${checkCell(row.npmTarball)}<span id="npm-att-${idx}"></span></div></td>`;
+    const yankedBadge = row.isYanked ? '<span class="badge-yanked" title="Yanked/pulled from npmjs.com — usually means the maintainer (or npm) removed it after a malware report or supply-chain attack">yanked</span>' : '';
+    html += `<td class="check-cell check-cell-left"><div class="check-and-prov">${checkCell(row.npmTarball)}${yankedBadge}<span id="npm-att-${idx}"></span></div></td>`;
     html += `<td class="check-cell check-cell-left"><div class="check-and-prov">${npmCgrCheckCell(row.cgrTarball)}<span id="cgr-att-${idx}"></span>${npmCgrBadge(row.cgrTarball)}</div></td>`;
     html += `</tr>`;
   }
