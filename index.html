@@ -495,6 +495,21 @@
     transition: opacity 0.08s;
   }
   #app-tooltip.visible { opacity: 1; }
+  th.sortable {
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  th.sortable:hover { background: rgba(0,0,0,0.04); }
+  th.sortable .sort-arrow {
+    display: inline-block;
+    width: 0.8em;
+    margin-left: 0.2em;
+    color: #94a3b8;
+    font-size: 0.75em;
+  }
+  th.sortable.active .sort-arrow { color: var(--accent, #475569); }
+  th.sortable.active { color: #1a1a2e; }
   .badge-yanked {
     background: #e2e8f0;
     color: #475569;
@@ -679,6 +694,7 @@
       <label class="filter-label"><input type="checkbox" id="npm-show-all"> Show all versions</label>
       <label class="filter-label"><input type="checkbox" id="npm-show-prerelease"> Show pre-release (alpha / beta / canary / rc)</label>
       <label class="filter-label"><input type="checkbox" id="npm-show-provenance"> Show provenance &amp; signed badges</label>
+      <label class="filter-label"><input type="checkbox" id="npm-show-malware"> Show malware</label>
     </div>
     <div class="banners" id="npm-banners"></div>
     <div class="results" id="npm-results">
@@ -698,6 +714,7 @@
     <div class="filter-row">
       <label class="filter-label"><input type="checkbox" id="maven-show-all"> Show all versions</label>
       <label class="filter-label"><input type="checkbox" id="maven-show-prerelease"> Show pre-release (alpha / beta / RC / snapshot)</label>
+      <label class="filter-label" title="Chainguard's malware feed only covers npm today; no maven data is available yet."><input type="checkbox" id="maven-show-malware" disabled> Show malware</label>
     </div>
     <div class="banners" id="maven-banners"></div>
     <div class="results" id="maven-results">
@@ -717,6 +734,7 @@
     <div class="filter-row">
       <label class="filter-label"><input type="checkbox" id="pypi-show-all"> Show all versions</label>
       <label class="filter-label"><input type="checkbox" id="pypi-show-prerelease"> Show pre-release (a / b / rc / dev / post)</label>
+      <label class="filter-label" title="Chainguard's malware feed only covers npm today; no pypi data is available yet."><input type="checkbox" id="pypi-show-malware" disabled> Show malware</label>
     </div>
     <div class="banners" id="pypi-banners"></div>
     <div class="results" id="pypi-results">
@@ -852,6 +870,71 @@ function formatDate(ts) {
   const days = Math.floor((Date.now() - d) / 86400000);
   return `${dateFmt.format(d)} (${days}d ago)`;
 }
+
+// ── Sortable table headers ───────────────────────────────────────────────────
+// Each tab declares a column registry below; renderers use sortableTh() to
+// emit a `<th>` with metadata, then applySort() reorders the rows.
+const SORT_COLS = {
+  npm: {
+    version:   { cmp: (a, b) => semverCompare(a.version, b.version),                       defaultDir: -1 },
+    published: { cmp: (a, b) => (Date.parse(a.published) || 0) - (Date.parse(b.published) || 0), defaultDir: -1 },
+    npmTar:    { cmp: (a, b) => (!!a.npmTarball) - (!!b.npmTarball),                       defaultDir: -1 },
+    cgrTar:    { cmp: (a, b) => (!!a.cgrTarball) - (!!b.cgrTarball),                       defaultDir: -1 },
+  },
+  maven: {
+    version:   { cmp: (a, b) => semverCompare(a.version, b.version),                       defaultDir: -1 },
+    published: { cmp: (a, b) => (a.published || 0) - (b.published || 0),                   defaultDir: -1 },
+    inMvn:     { cmp: (a, b) => (a.inMvn ? 1 : 0) - (b.inMvn ? 1 : 0),                     defaultDir: -1 },
+    cgrType:   { cmp: (a, b) => (a.cgrType ? 1 : 0) - (b.cgrType ? 1 : 0),                 defaultDir: -1 },
+  },
+  pypi: {
+    version:   { cmp: (a, b) => pypiVersionCompare(a.version, b.version),                  defaultDir: -1 },
+    published: { cmp: (a, b) => (Date.parse(a.published) || 0) - (Date.parse(b.published) || 0), defaultDir: -1 },
+    pypiUrl:   { cmp: (a, b) => (!!a.pypiUrl) - (!!b.pypiUrl),                             defaultDir: -1 },
+    cgrType:   { cmp: (a, b) => ((a.cgrPlatforms?.wheelCount || 0) > 0 ? 1 : 0) - ((b.cgrPlatforms?.wheelCount || 0) > 0 ? 1 : 0), defaultDir: -1 },
+  },
+  bulk: {
+    pkg:        { cmp: (a, b) => a.pkg.localeCompare(b.pkg),                               defaultDir:  1 },
+    requested:  { cmp: (a, b) => (a.requestedVersion || '').localeCompare(b.requestedVersion || ''), defaultDir: 1 },
+    matchState: { cmp: (a, b) => (a.match ? 2 : a.upgrade ? 1 : 0) - (b.match ? 2 : b.upgrade ? 1 : 0), defaultDir: -1 },
+  },
+};
+
+function sortableTh(tab, key, label, extraStyle = '') {
+  const st = state[tab].sort;
+  const isActive = st.key === key;
+  const arrow = isActive ? (st.dir > 0 ? '▲' : '▼') : '';
+  return `<th class="sortable${isActive ? ' active' : ''}" data-tab="${tab}" data-sort-key="${escHtml(key)}" style="${extraStyle}">${escHtml(label)}<span class="sort-arrow">${arrow}</span></th>`;
+}
+
+function applySort(tab, rows) {
+  const st = state[tab].sort;
+  const col = SORT_COLS[tab]?.[st.key];
+  if (!col) return rows;
+  return [...rows].sort((a, b) => col.cmp(a, b) * st.dir);
+}
+
+// One-time event delegation. Re-renders the active tab's table on header click.
+document.addEventListener('click', e => {
+  const th = e.target.closest?.('th.sortable');
+  if (!th || !th.dataset.tab) return;
+  const tab = th.dataset.tab, key = th.dataset.sortKey;
+  const st = state[tab].sort;
+  if (st.key === key) {
+    st.dir *= -1;
+  } else {
+    st.key = key;
+    st.dir = SORT_COLS[tab]?.[key]?.defaultDir ?? -1;
+  }
+  TAB_RERENDERS[tab]?.();
+});
+
+const TAB_RERENDERS = {
+  npm:   () => state.npm.lastData   && npmRenderTable(state.npm.lastData),
+  maven: () => state.maven.lastData && mavenRenderTable(state.maven.lastData),
+  pypi:  () => state.pypi.lastData  && pypiRenderTable(state.pypi.lastData),
+  bulk:  () => state.bulk.lastData  && bulkRenderTable(state.bulk.lastData.results, null, state.bulk.lastData.ecosystem),
+};
 
 function copyToClipboard(text, btn) {
   const original = btn?.textContent ?? 'Copy results';
@@ -1170,10 +1253,10 @@ tabBtns.forEach(btn => {
 // ── State ─────────────────────────────────────────────────────────────────────
 
 const state = {
-  npm:   { lastData: null, lastSnapshot: null },
-  maven: { lastData: null, lastSnapshot: null },
-  pypi:  { lastData: null, lastSnapshot: null },
-  bulk:  { lastData: null },
+  npm:   { lastData: null, lastSnapshot: null, sort: { key: 'version', dir: -1 } },
+  maven: { lastData: null, lastSnapshot: null, sort: { key: 'version', dir: -1 } },
+  pypi:  { lastData: null, lastSnapshot: null, sort: { key: 'version', dir: -1 } },
+  bulk:  { lastData: null,                     sort: { key: 'pkg',     dir:  1 } },
 };
 
 // ── npm tab ───────────────────────────────────────────────────────────────────
@@ -1364,7 +1447,7 @@ function npmRenderBanners(npmError, cgrError, pkg) {
 function npmRenderTable(data) {
   const { name, latest, rows: allRows } = data;
   const el = document.getElementById('npm-results');
-  const rows = npmApplyFilters(allRows);
+  const rows = applySort('npm', npmApplyFilters(allRows));
 
   if (allRows.length === 0) {
     el.innerHTML = `<div class="status-placeholder">No versions found for <strong>${escHtml(name)}</strong></div>`;
@@ -1391,13 +1474,14 @@ function npmRenderTable(data) {
       </div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Version</th><th>Published</th><th style="text-align:left">npmjs.com</th><th style="text-align:left">Chainguard</th></tr></thead>
+      <thead><tr>${sortableTh('npm','version','Version')}${sortableTh('npm','published','Published')}${sortableTh('npm','npmTar','npmjs.com','text-align:left')}${sortableTh('npm','cgrTar','Chainguard','text-align:left')}</tr></thead>
       <tbody>`;
 
+  const showMalware = document.getElementById('npm-show-malware').checked;
   for (const [idx, row] of rows.entries()) {
     const isLatest = row.version === latest;
     html += `<tr${isLatest ? ' class="latest"' : ''}>`;
-    html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}${row.hasInstallScripts ? '<span class="badge-scripts" title="Has install lifecycle scripts (preinstall/install/postinstall)">scripts</span>' : ''}${malwareBadgeHtml(row.malware)}</div></td>`;
+    html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}${row.hasInstallScripts ? '<span class="badge-scripts" title="Has install lifecycle scripts (preinstall/install/postinstall)">scripts</span>' : ''}${showMalware ? malwareBadgeHtml(row.malware) : ''}</div></td>`;
     html += `<td class="date-cell">${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
     const yankedBadge = row.isYanked ? '<span class="badge-yanked" title="Yanked/pulled from npmjs.com — usually means the maintainer (or npm) removed it after a malware report or supply-chain attack">yanked</span>' : '';
     html += `<td class="check-cell check-cell-left"><div class="check-and-prov">${checkCell(row.npmTarball)}${yankedBadge}<span id="npm-att-${idx}"></span></div></td>`;
@@ -1435,6 +1519,7 @@ function npmCopyResults() {
 }
 
 document.getElementById('npm-show-all').addEventListener('change', () => { if (state.npm.lastData) npmRenderTable(state.npm.lastData); });
+document.getElementById('npm-show-malware').addEventListener('change', () => { if (state.npm.lastData) npmRenderTable(state.npm.lastData); });
 document.getElementById('npm-show-prerelease').addEventListener('change', () => { if (state.npm.lastData) npmRenderTable(state.npm.lastData); });
 document.getElementById('npm-show-provenance').addEventListener('change', e => {
   if (!e.target.checked) {
@@ -1664,7 +1749,7 @@ function mavenRenderBanners(data) {
 function mavenRenderTable(data) {
   const { name, group, artifact, latest, rows: allRows } = data;
   const el = document.getElementById('maven-results');
-  const rows = mavenApplyFilters(allRows);
+  const rows = applySort('maven', mavenApplyFilters(allRows));
 
   if (allRows.length === 0) {
     el.innerHTML = `<div class="status-placeholder">No versions found for <strong>${escHtml(name)}</strong></div>`;
@@ -1692,7 +1777,7 @@ function mavenRenderTable(data) {
       </div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Version</th><th>Published</th><th style="text-align:center">Maven Central</th><th style="text-align:center">Chainguard</th></tr></thead>
+      <thead><tr>${sortableTh('maven','version','Version')}${sortableTh('maven','published','Published')}${sortableTh('maven','inMvn','Maven Central','text-align:center')}${sortableTh('maven','cgrType','Chainguard','text-align:center')}</tr></thead>
       <tbody>`;
 
   for (const row of rows) {
@@ -2133,7 +2218,7 @@ function pypiPlatformsCell(p) {
 function pypiRenderTable(data) {
   const { name, latest, rows: allRows } = data;
   const el = document.getElementById('pypi-results');
-  const rows = pypiApplyFilters(allRows);
+  const rows = applySort('pypi', pypiApplyFilters(allRows));
 
   if (allRows.length === 0) {
     el.innerHTML = `<div class="status-placeholder">No versions found for <strong>${escHtml(name)}</strong></div>`;
@@ -2164,7 +2249,7 @@ function pypiRenderTable(data) {
       </div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr><th>Version</th><th>Published</th><th style="text-align:center">PyPI</th><th style="text-align:center">Chainguard</th><th>CGR platforms</th></tr></thead>
+      <thead><tr>${sortableTh('pypi','version','Version')}${sortableTh('pypi','published','Published')}${sortableTh('pypi','pypiUrl','PyPI','text-align:center')}${sortableTh('pypi','cgrType','Chainguard','text-align:center')}<th>CGR platforms</th></tr></thead>
       <tbody>`;
 
   for (const row of rows) {
@@ -2523,13 +2608,13 @@ function bulkRenderNpm(results, el) {
 
   html += `<div class="table-wrap"><table class="bulk-table">`;
   html += `<thead><tr>
-    <th>Package</th>
-    <th style="color:#94a3b8;font-weight:500">Requested</th>
-    <th class="ver-slot-th" style="text-align:left">Match in CGR</th>
+    ${sortableTh('bulk','pkg','Package')}
+    ${sortableTh('bulk','requested','Requested','color:#94a3b8;font-weight:500;text-align:left')}
+    ${sortableTh('bulk','matchState','Match in CGR','text-align:left;min-width:160px;')}
     <th class="ver-slot-th" style="text-align:left">Suggested upgrade</th>
   </tr></thead><tbody>`;
 
-  for (const r of resolved) {
+  for (const r of applySort('bulk', resolved)) {
     const { pkg, requestedVersion, error, normalized, match, upgrade } = r;
     html += `<tr>`;
     html += `<td><a href="#" class="pkg-name" style="font-family:'SFMono-Regular',Consolas,monospace;font-size:0.85rem;" onclick="event.preventDefault();bulkDrillDown('${escHtml(pkg)}','npm')">${escHtml(pkg)}</a></td>`;
@@ -2599,14 +2684,14 @@ function bulkRenderPypi(results, el) {
 
   html += `<div class="table-wrap"><table class="bulk-table">`;
   html += `<thead><tr>
-    <th>Package</th>
-    <th style="color:#94a3b8;font-weight:500">Requested</th>
-    <th class="ver-slot-th" style="text-align:left">Match in CGR</th>
+    ${sortableTh('bulk','pkg','Package')}
+    ${sortableTh('bulk','requested','Requested','color:#94a3b8;font-weight:500;text-align:left')}
+    ${sortableTh('bulk','matchState','Match in CGR','text-align:left;min-width:160px;')}
     <th class="ver-slot-th" style="text-align:left">Suggested upgrade</th>
     <th style="text-align:left">CGR platforms</th>
   </tr></thead><tbody>`;
 
-  for (const r of resolved) {
+  for (const r of applySort('bulk', resolved)) {
     const { pkg, requestedVersion, error, normalized, match, upgrade } = r;
     html += `<tr>`;
     html += `<td><a href="#" class="pkg-name" style="font-family:'SFMono-Regular',Consolas,monospace;font-size:0.85rem;" onclick="event.preventDefault();bulkDrillDown('${escHtml(pkg)}','pypi')">${escHtml(pkg)}</a></td>`;
