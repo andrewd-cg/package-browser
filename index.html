@@ -510,6 +510,46 @@
   }
   th.sortable.active .sort-arrow { color: var(--accent, #475569); }
   th.sortable.active { color: #1a1a2e; }
+  .integrity-cell {
+    font-family: 'SFMono-Regular', Consolas, monospace;
+    font-size: 0.72rem;
+    color: #475569;
+    line-height: 1.4;
+  }
+  .integrity-line {
+    display: block;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+  }
+  .integrity-line:hover { color: #1a1a2e; }
+  .integrity-line.copied { color: #16a34a; }
+  .integrity-copy {
+    display: inline-block;
+    width: 11px;
+    height: 11px;
+    margin-left: 0.4rem;
+    vertical-align: -1px;
+    color: #cbd5e1;
+    transition: color 0.1s;
+  }
+  .integrity-line:hover .integrity-copy { color: #475569; }
+  .integrity-line.copied .integrity-copy { color: #16a34a; }
+  .integrity-match-label {
+    font-size: 0.65rem;
+    color: #94a3b8;
+    margin-left: 0.4rem;
+    font-style: italic;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  }
+  .integrity-source-tag {
+    display: inline-block;
+    width: 2em;
+    color: #94a3b8;
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+  }
   .badge-yanked {
     background: #e2e8f0;
     color: #475569;
@@ -840,6 +880,10 @@
       <button type="button" class="copy-btn" id="mal-clear-btn">Clear</button>
     </div>
     <div class="mal-bar">
+      <label class="filter-label" style="font-size:0.82rem;">
+        <input type="checkbox" id="mal-exact"> Exact match (package + version)
+      </label>
+      <span style="flex:1"></span>
       <span><span class="mal-stat" id="mal-result-count">0</span> matches</span>
       <span style="flex:1"></span>
       <button type="button" class="copy-btn" id="mal-prev-btn" disabled>← Prev</button>
@@ -869,6 +913,12 @@ function formatDate(ts) {
   if (isNaN(d)) return '';
   const days = Math.floor((Date.now() - d) / 86400000);
   return `${dateFmt.format(d)} (${days}d ago)`;
+}
+
+function formatDateExact(ts) {
+  const d = new Date(typeof ts === 'number' ? ts : ts);
+  if (isNaN(d)) return '';
+  return d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
 }
 
 // ── Sortable table headers ───────────────────────────────────────────────────
@@ -1040,6 +1090,35 @@ function npmCgrBadge(tarball) {
     return `<span class="cgr-badge built" title="Built by Chainguard">Built</span>`;
   }
   return '';
+}
+
+// Render the integrity cell. Both registries' `dist.integrity` SRI strings are
+// already in the row; this helper handles the four states cleanly:
+//   - both equal (mirrored)  → one line + "matches upstream" label
+//   - both differ (built)    → stacked npm / cgr with a ⚠ on the differing one
+//   - one present only       → that single line
+//   - neither                → "—"
+// Each line carries `data-sri` so the delegated click handler can copy it.
+const COPY_ICON_SVG = '<svg class="integrity-copy" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>';
+
+function integrityLine(label, sri) {
+  const truncated = sri.length > 24 ? sri.slice(0, 24) + '…' : sri;
+  return `<span class="integrity-line" data-sri="${escHtml(sri)}" title="Click to copy · ${escHtml(sri)}"><span class="integrity-source-tag">${escHtml(label)}</span>${escHtml(truncated)}${COPY_ICON_SVG}</span>`;
+}
+
+function integrityCell(npmI, cgrI) {
+  if (!npmI && !cgrI) return '<span style="color:#cbd5e1">—</span>';
+  let body = '';
+  if (npmI && cgrI && npmI === cgrI) {
+    body = integrityLine('', npmI) + `<span class="integrity-match-label">matches upstream</span>`;
+  } else if (npmI && cgrI) {
+    body = integrityLine('npm', npmI) + integrityLine('cgr', cgrI);
+  } else if (npmI) {
+    body = integrityLine('npm', npmI);
+  } else {
+    body = integrityLine('cgr', cgrI);
+  }
+  return `<div class="integrity-cell">${body}</div>`;
 }
 
 function statsHtml(registry1Label, r1Count, cgrCount, total, cgrBuilt, cgrMirror) {
@@ -1407,6 +1486,8 @@ async function npmLookup(pkg) {
       published: npmTime[v] || null,
       npmTarball: npmVersions[v]?.dist?.tarball || null,
       cgrTarball: cgrVersions[v]?.dist?.tarball || null,
+      npmIntegrity: npmVersions[v]?.dist?.integrity || null,
+      cgrIntegrity: cgrVersions[v]?.dist?.integrity || null,
       isYanked: !!(npmTime[v] && !npmVersions[v]),
       hasInstallScripts: !!(npmVersions[v]?.scripts && Object.keys(npmVersions[v].scripts).some(k => ['preinstall', 'install', 'postinstall'].includes(k))),
       malware: malByVersion.get(v) || (malPackageWide[0] ? { ...malPackageWide[0], _packageWide: true } : null),
@@ -1474,7 +1555,7 @@ function npmRenderTable(data) {
       </div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr>${sortableTh('npm','version','Version')}${sortableTh('npm','published','Published')}${sortableTh('npm','npmTar','npmjs.com','text-align:left')}${sortableTh('npm','cgrTar','Chainguard','text-align:left')}</tr></thead>
+      <thead><tr>${sortableTh('npm','version','Version')}${sortableTh('npm','published','Published')}${sortableTh('npm','npmTar','npmjs.com','text-align:left')}${sortableTh('npm','cgrTar','Chainguard','text-align:left')}<th style="text-align:left">Integrity</th></tr></thead>
       <tbody>`;
 
   const showMalware = document.getElementById('npm-show-malware').checked;
@@ -1482,10 +1563,11 @@ function npmRenderTable(data) {
     const isLatest = row.version === latest;
     html += `<tr${isLatest ? ' class="latest"' : ''}>`;
     html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}${row.hasInstallScripts ? '<span class="badge-scripts" title="Has install lifecycle scripts (preinstall/install/postinstall)">scripts</span>' : ''}${showMalware ? malwareBadgeHtml(row.malware) : ''}</div></td>`;
-    html += `<td class="date-cell">${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
+    html += `<td class="date-cell"${row.published ? ` title="${escHtml(formatDateExact(row.published))}"` : ''}>${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
     const yankedBadge = row.isYanked ? '<span class="badge-yanked" title="Yanked/pulled from npmjs.com — usually means the maintainer (or npm) removed it after a malware report or supply-chain attack">yanked</span>' : '';
     html += `<td class="check-cell check-cell-left"><div class="check-and-prov">${checkCell(row.npmTarball)}${yankedBadge}<span id="npm-att-${idx}"></span></div></td>`;
     html += `<td class="check-cell check-cell-left"><div class="check-and-prov">${npmCgrCheckCell(row.cgrTarball)}<span id="cgr-att-${idx}"></span>${npmCgrBadge(row.cgrTarball)}</div></td>`;
+    html += `<td>${integrityCell(row.npmIntegrity, row.cgrIntegrity)}</td>`;
     html += `</tr>`;
   }
   html += `</tbody></table></div>`;
@@ -1520,6 +1602,20 @@ function npmCopyResults() {
 
 document.getElementById('npm-show-all').addEventListener('change', () => { if (state.npm.lastData) npmRenderTable(state.npm.lastData); });
 document.getElementById('npm-show-malware').addEventListener('change', () => { if (state.npm.lastData) npmRenderTable(state.npm.lastData); });
+
+// Click-to-copy SRI integrity strings. Delegated so it survives re-renders.
+document.getElementById('npm-results').addEventListener('click', e => {
+  const t = e.target.closest?.('[data-sri]');
+  if (!t) return;
+  const sri = t.dataset.sri;
+  if (!sri) return;
+  // Borrow copyToClipboard's flash by passing a temp shim that toggles a class
+  // on the actual element instead of changing its textContent (we don't want
+  // the truncated hash text to flip to "Copied!" — the tag span is fixed).
+  if (navigator.clipboard?.writeText) navigator.clipboard.writeText(sri);
+  t.classList.add('copied');
+  setTimeout(() => t.classList.remove('copied'), 900);
+});
 document.getElementById('npm-show-prerelease').addEventListener('change', () => { if (state.npm.lastData) npmRenderTable(state.npm.lastData); });
 document.getElementById('npm-show-provenance').addEventListener('change', e => {
   if (!e.target.checked) {
@@ -1786,7 +1882,7 @@ function mavenRenderTable(data) {
     const cgrUrl = row.cgrType ? `https://libraries.cgr.dev/${row.cgrType === 'built' ? 'java' : 'java-upstream'}/${group.replace(/\./g,'/')}/${artifact}/${row.version}/` : null;
     html += `<tr${isLatest ? ' class="latest"' : ''}>`;
     html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}</div></td>`;
-    html += `<td class="date-cell">${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
+    html += `<td class="date-cell"${row.published ? ` title="${escHtml(formatDateExact(row.published))}"` : ''}>${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
     html += `<td class="check-cell">${checkCell(mvnUrl)}</td>`;
     html += `<td class="check-cell">${cgrCheckCell(row.cgrType, cgrUrl)}</td>`;
     html += `</tr>`;
@@ -2256,7 +2352,7 @@ function pypiRenderTable(data) {
     const isLatest = row.version === latest;
     html += `<tr${isLatest ? ' class="latest"' : ''}>`;
     html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}</div></td>`;
-    html += `<td class="date-cell">${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
+    html += `<td class="date-cell"${row.published ? ` title="${escHtml(formatDateExact(row.published))}"` : ''}>${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
     html += `<td class="check-cell">${checkCell(row.pypiUrl)}</td>`;
     const covered = hasCgrWheel(row);
     html += `<td class="check-cell">${cgrCheckCell(covered ? row.cgrType : null, covered ? row.cgrTarball : null)}</td>`;
@@ -2882,6 +2978,7 @@ function malBuildFilterParams() {
   const source  = document.getElementById('mal-source').value;
   const sinceD  = document.getElementById('mal-since').value;
   const untilD  = document.getElementById('mal-until').value;
+  const exact   = document.getElementById('mal-exact').checked;
   const params = new URLSearchParams();
   if (q)      params.set('q', q);
   if (ver)    params.set('version', ver);
@@ -2892,6 +2989,7 @@ function malBuildFilterParams() {
     const d = new Date(untilD + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1);
     params.set('until', d.toISOString().slice(0, 19) + 'Z');
   }
+  if (exact)  params.set('exact', '1');
   return params;
 }
 
@@ -3119,10 +3217,11 @@ document.getElementById('mal-clear-btn').addEventListener('click', () => {
   document.getElementById('mal-source').value = 'chainguard';
   document.getElementById('mal-since').value = '';
   document.getElementById('mal-until').value = '';
+  document.getElementById('mal-exact').checked = false;
   malDispatchFilters(true);
 });
 ['mal-q', 'mal-version'].forEach(id => document.getElementById(id).addEventListener('input', () => malDispatchFilters()));
-['mal-reason', 'mal-source', 'mal-since', 'mal-until'].forEach(id => document.getElementById(id).addEventListener('change', () => malDispatchFilters(true)));
+['mal-reason', 'mal-source', 'mal-since', 'mal-until', 'mal-exact'].forEach(id => document.getElementById(id).addEventListener('change', () => malDispatchFilters(true)));
 document.getElementById('mal-prev-btn').addEventListener('click', () => { if (malState.page > 0) { malState.page--; malRunSearch(); } });
 document.getElementById('mal-next-btn').addEventListener('click', () => { malState.page++; malRunSearch(); });
 

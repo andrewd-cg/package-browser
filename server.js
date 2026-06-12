@@ -393,13 +393,14 @@ Bun.serve({
       const src     = url.searchParams.get('source')  || '';
       const since   = url.searchParams.get('since')   || '';
       const until   = url.searchParams.get('until')   || '';
+      const exact   = url.searchParams.get('exact')   === '1';
       const limit   = Math.min(parseInt(url.searchParams.get('limit')  || '200', 10) || 200, 1000);
       const offset  = parseInt(url.searchParams.get('offset') || '0',  10) || 0;
 
       const where = ["ecosystem = 'npm'"];
       const args  = [];
-      if (q)     { where.push('package_name LIKE ?'); args.push(`%${q}%`); }
-      if (ver)   { where.push('version LIKE ?');      args.push(`%${ver}%`); }
+      if (q)     { where.push(exact ? 'package_name = ?' : 'package_name LIKE ?'); args.push(exact ? q : `%${q}%`); }
+      if (ver)   { where.push(exact ? 'version = ?'      : 'version LIKE ?');      args.push(exact ? ver : `%${ver}%`); }
       if (reason){ where.push('reason_json LIKE ?');  args.push(`%${reason}%`); }
       if (src)   { where.push('source = ?');          args.push(src); }
       if (since) { where.push('blocked_at >= ?');     args.push(since); }
@@ -425,10 +426,11 @@ Bun.serve({
       const src    = url.searchParams.get('source')  || '';
       const since  = url.searchParams.get('since')   || '';
       const until  = url.searchParams.get('until')   || '';
+      const exact  = url.searchParams.get('exact')   === '1';
       const where = ["ecosystem = 'npm'"];
       const args  = [];
-      if (q)     { where.push('package_name LIKE ?'); args.push(`%${q}%`); }
-      if (ver)   { where.push('version LIKE ?');      args.push(`%${ver}%`); }
+      if (q)     { where.push(exact ? 'package_name = ?' : 'package_name LIKE ?'); args.push(exact ? q : `%${q}%`); }
+      if (ver)   { where.push(exact ? 'version = ?'      : 'version LIKE ?');      args.push(exact ? ver : `%${ver}%`); }
       if (reason){ where.push('reason_json LIKE ?');  args.push(`%${reason}%`); }
       if (src)   { where.push('source = ?');          args.push(src); }
       if (since) { where.push('blocked_at >= ?');     args.push(since); }
