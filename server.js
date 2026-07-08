@@ -145,6 +145,9 @@ async function runMalwareSync({ token, full = false }) {
   const apiBase = 'https://console-api.enforce.dev/libraries/v1/malware/blocklist';
   try {
     for (const { apiName, dbName } of PLATFORM_ECOSYSTEMS) {
+      if (full) {
+        db.prepare(`DELETE FROM malware WHERE ecosystem = ?`).run(dbName);
+      }
       let since = '2026-01-01T00:00:00Z';
       if (!full) {
         const latest = db.prepare(`SELECT MAX(blocked_at) AS m FROM malware WHERE ecosystem = ?`).get(dbName);
