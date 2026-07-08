@@ -877,6 +877,12 @@
       <svg id="mal-chart-svg" height="128"></svg>
     </div>
     <div class="mal-bar">
+      <select id="mal-eco" style="min-width:120px;">
+        <option value="">All ecosystems</option>
+        <option value="npm">npm</option>
+        <option value="PyPI">PyPI</option>
+        <option value="Maven">Maven</option>
+      </select>
       <input type="text" id="mal-q" placeholder="Package name contains…" style="min-width:200px;">
       <input type="text" id="mal-version" placeholder="Version contains…" style="min-width:140px;">
       <select id="mal-source" style="min-width:160px;">
@@ -3080,7 +3086,8 @@ async function malLoadStatus() {
 }
 
 async function malLoadReasons() {
-  const res = await fetch('/api/cgr-malware/reasons');
+  const eco = document.getElementById('mal-eco').value;
+  const res = await fetch(`/api/cgr-malware/reasons${eco ? `?eco=${encodeURIComponent(eco)}` : ''}`);
   const data = await res.json();
   const sel = document.getElementById('mal-reason');
   const current = sel.value;
@@ -3093,6 +3100,7 @@ async function malLoadReasons() {
 }
 
 function malBuildFilterParams() {
+  const eco     = document.getElementById('mal-eco').value;
   const q       = document.getElementById('mal-q').value.trim();
   const ver     = document.getElementById('mal-version').value.trim();
   const reason  = document.getElementById('mal-reason').value;
@@ -3101,6 +3109,7 @@ function malBuildFilterParams() {
   const untilD  = document.getElementById('mal-until').value;
   const exact   = document.getElementById('mal-exact').checked;
   const params = new URLSearchParams();
+  if (eco)    params.set('eco', eco);
   if (q)      params.set('q', q);
   if (ver)    params.set('version', ver);
   if (reason) params.set('reason', reason);
@@ -3204,6 +3213,7 @@ async function malLoadChart() {
 function malDispatchFilters(immediate = false) {
   malScheduleSearch(immediate);
   malLoadChart();
+  malLoadReasons();
 }
 
 async function malRunSearch() {
@@ -3335,6 +3345,7 @@ document.getElementById('mal-full-btn').addEventListener('click', () => {
   if (confirm('Re-fetch the full dataset since 2026-01-01? This may take a few minutes.')) malRunSync({ full: true });
 });
 document.getElementById('mal-clear-btn').addEventListener('click', () => {
+  document.getElementById('mal-eco').value = '';
   document.getElementById('mal-q').value = '';
   document.getElementById('mal-version').value = '';
   document.getElementById('mal-reason').value = '';
@@ -3345,7 +3356,7 @@ document.getElementById('mal-clear-btn').addEventListener('click', () => {
   malDispatchFilters(true);
 });
 ['mal-q', 'mal-version'].forEach(id => document.getElementById(id).addEventListener('input', () => malDispatchFilters()));
-['mal-reason', 'mal-source', 'mal-since', 'mal-until', 'mal-exact'].forEach(id => document.getElementById(id).addEventListener('change', () => malDispatchFilters(true)));
+['mal-eco', 'mal-reason', 'mal-source', 'mal-since', 'mal-until', 'mal-exact'].forEach(id => document.getElementById(id).addEventListener('change', () => malDispatchFilters(true)));
 document.getElementById('mal-prev-btn').addEventListener('click', () => { if (malState.page > 0) { malState.page--; malRunSearch(); } });
 document.getElementById('mal-next-btn').addEventListener('click', () => { malState.page++; malRunSearch(); });
 

@@ -468,6 +468,7 @@ Bun.serve({
 
     // Malware search (filtered, server-side).
     if (url.pathname === '/api/cgr-malware/search') {
+      const eco     = url.searchParams.get('eco')     || '';
       const q       = url.searchParams.get('q')       || '';
       const ver     = url.searchParams.get('version') || '';
       const reason  = url.searchParams.get('reason')  || '';
@@ -478,8 +479,8 @@ Bun.serve({
       const limit   = Math.min(parseInt(url.searchParams.get('limit')  || '200', 10) || 200, 1000);
       const offset  = parseInt(url.searchParams.get('offset') || '0',  10) || 0;
 
-      const where = ["ecosystem = 'npm'"];
-      const args  = [];
+      const where = eco ? ['ecosystem = ?'] : [];
+      const args  = eco ? [eco] : [];
       if (q)     { where.push(exact ? 'package_name = ?' : 'package_name LIKE ?'); args.push(exact ? q : `%${q}%`); }
       if (ver)   { where.push(exact ? 'version = ?'      : 'version LIKE ?');      args.push(exact ? ver : `%${ver}%`); }
       if (reason){ where.push('reason_json LIKE ?');  args.push(`%${reason}%`); }
@@ -501,6 +502,7 @@ Bun.serve({
 
     // Per-day findings histogram (same filter shape as /search).
     if (url.pathname === '/api/cgr-malware/histogram') {
+      const eco    = url.searchParams.get('eco')     || '';
       const q      = url.searchParams.get('q')       || '';
       const ver    = url.searchParams.get('version') || '';
       const reason = url.searchParams.get('reason')  || '';
@@ -508,8 +510,8 @@ Bun.serve({
       const since  = url.searchParams.get('since')   || '';
       const until  = url.searchParams.get('until')   || '';
       const exact  = url.searchParams.get('exact')   === '1';
-      const where = ["ecosystem = 'npm'"];
-      const args  = [];
+      const where = eco ? ['ecosystem = ?'] : [];
+      const args  = eco ? [eco] : [];
       if (q)     { where.push(exact ? 'package_name = ?' : 'package_name LIKE ?'); args.push(exact ? q : `%${q}%`); }
       if (ver)   { where.push(exact ? 'version = ?'      : 'version LIKE ?');      args.push(exact ? ver : `%${ver}%`); }
       if (reason){ where.push('reason_json LIKE ?');  args.push(`%${reason}%`); }
@@ -546,15 +548,17 @@ Bun.serve({
     // are collapsed into a single "MAL-ID*" bucket; the row carries a
     // `searchAs` field so the client can submit a prefix to the search endpoint.
     if (url.pathname === '/api/cgr-malware/reasons') {
+      const eco = url.searchParams.get('eco') || '';
+      const ecoFilter = eco ? `AND m.ecosystem = ?` : '';
       const rows = db.prepare(`
         SELECT
           CASE WHEN je.value GLOB 'MAL-[0-9]*-[0-9]*' THEN 'MAL-ID*' ELSE je.value END AS reason,
           COUNT(DISTINCT m.rowid) AS n
         FROM malware m, json_each(m.reason_json) je
-        WHERE m.ecosystem = 'npm'
+        WHERE 1=1 ${ecoFilter}
         GROUP BY reason
         ORDER BY reason COLLATE NOCASE
-      `).all();
+      `).all(...(eco ? [eco] : []));
       for (const r of rows) {
         if (r.reason === 'MAL-ID*') r.searchAs = 'MAL-';
       }
