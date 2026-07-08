@@ -721,6 +721,17 @@
       <button type="button" class="copy-btn cred-copy-btn" onclick="copyCredHint(this)">Copy</button>
     </div>
   </div>
+  <div class="settings-section">
+    <h2>Malware API — Platform token (console-api.enforce.dev)</h2>
+    <div class="settings-row">
+      <label for="platform-token" style="min-width:130px">Bearer Token</label>
+      <input type="password" id="platform-token" placeholder="eyJ…" autocomplete="off" style="width:320px">
+      <button class="save-btn" id="platform-token-save-btn" onclick="savePlatformToken()">Save</button>
+      <span class="save-status" id="platform-token-status"></span>
+      <code class="cred-hint">chainctl auth token --audience https://console-api.enforce.dev</code>
+      <button type="button" class="copy-btn cred-copy-btn" onclick="copyCredHint(this)">Copy</button>
+    </div>
+  </div>
 </div>
 
 <main>
@@ -748,13 +759,13 @@
   <!-- maven tab -->
   <div id="tab-maven" class="tab-pane">
     <form class="search-box" id="maven-form">
-      <input type="text" class="pkg-input" id="maven-input" placeholder="groupId:artifactId (e.g. com.google.guava:guava)" autocomplete="off" spellcheck="false" style="font-family:'SFMono-Regular',Consolas,monospace">
+      <input type="text" class="pkg-input" id="maven-input" placeholder="groupId:artifactId (e.g. org.apache.logging.log4j:log4j-core)" autocomplete="off" spellcheck="false" style="font-family:'SFMono-Regular',Consolas,monospace">
       <button type="submit" class="fetch-btn" id="maven-btn">Fetch versions</button>
     </form>
     <div class="filter-row">
       <label class="filter-label"><input type="checkbox" id="maven-show-all"> Show all versions</label>
       <label class="filter-label"><input type="checkbox" id="maven-show-prerelease"> Show pre-release (alpha / beta / RC / snapshot)</label>
-      <label class="filter-label" title="Chainguard's malware feed only covers npm today; no maven data is available yet."><input type="checkbox" id="maven-show-malware" disabled> Show malware</label>
+      <label class="filter-label"><input type="checkbox" id="maven-show-malware" checked> Show malware</label>
     </div>
     <div class="banners" id="maven-banners"></div>
     <div class="results" id="maven-results">
@@ -774,7 +785,7 @@
     <div class="filter-row">
       <label class="filter-label"><input type="checkbox" id="pypi-show-all"> Show all versions</label>
       <label class="filter-label"><input type="checkbox" id="pypi-show-prerelease"> Show pre-release (a / b / rc / dev / post)</label>
-      <label class="filter-label" title="Chainguard's malware feed only covers npm today; no pypi data is available yet."><input type="checkbox" id="pypi-show-malware" disabled> Show malware</label>
+      <label class="filter-label"><input type="checkbox" id="pypi-show-malware" checked> Show malware</label>
     </div>
     <div class="banners" id="pypi-banners"></div>
     <div class="results" id="pypi-results">
@@ -1056,12 +1067,15 @@ function checkCell(url) {
   return `<a class="check-link" href="${escHtml(url)}" target="_blank" rel="noopener" title="${escHtml(url)}">✓</a>`;
 }
 
-function cgrCheckCell(type, url) {
+function cgrCheckCell(type, url, eco) {
   if (!type) return `<span class="cross" title="Not available">✗</span>`;
   const badge = type === 'built'
-    ? `<span class="cgr-badge built" title="Built by Chainguard">Built</span>`
-    : `<span class="cgr-badge mirror" title="Mirrored from upstream">Secure Mirror</span>`;
-  return `<span class="check-wrap"><a class="check-link" href="${escHtml(url)}" target="_blank" rel="noopener">✓</a>${badge}</span>`;
+    ? `<span class="cgr-badge built" title="Built from source by Chainguard">Built from Source</span>`
+    : `<span class="cgr-badge mirror" title="Proxied from upstream after deep malware scan and policy checks">Scanned Upstream</span>`;
+  const linkAttrs = eco
+    ? `class="check-link cgr-dl" data-eco="${escHtml(eco)}" href="${escHtml(url)}"`
+    : `class="check-link" href="${escHtml(url)}" target="_blank" rel="noopener"`;
+  return `<span class="check-wrap"><a ${linkAttrs}>✓</a>${badge}</span>`;
 }
 
 function malwareBadgeHtml(m) {
@@ -1085,9 +1099,9 @@ function npmCgrCheckCell(tarball) {
 function npmCgrBadge(tarball) {
   if (!tarball) return '';
   if (tarball.includes('libraries.cgr.dev/javascript-upstream/')) {
-    return `<span class="cgr-badge mirror" title="Mirrored from upstream">Secure Mirror</span>`;
+    return `<span class="cgr-badge mirror" title="Proxied from upstream after deep malware scan and policy checks">Scanned Upstream</span>`;
   } else if (tarball.includes('libraries.cgr.dev/javascript/')) {
-    return `<span class="cgr-badge built" title="Built by Chainguard">Built</span>`;
+    return `<span class="cgr-badge built" title="Built from source by Chainguard">Built from Source</span>`;
   }
   return '';
 }
@@ -1138,11 +1152,11 @@ function statsHtml(registry1Label, r1Count, cgrCount, total, cgrBuilt, cgrMirror
         <span class="stat-value">${cgrCount} <span class="stat-pct">${cgrPct}%</span></span>
       </div>
       <div class="stat-block stat-sub">
-        <span class="stat-label">Built</span>
+        <span class="stat-label">Built from Source</span>
         <span class="stat-value">${cgrBuilt} <span class="stat-pct built">${builtPct}%</span></span>
       </div>
       <div class="stat-block stat-sub">
-        <span class="stat-label">Mirrored</span>
+        <span class="stat-label">Scanned Upstream</span>
         <span class="stat-value">${cgrMirror} <span class="stat-pct mirror">${mirrorPct}%</span></span>
       </div>
     </div>`
@@ -1157,6 +1171,34 @@ const CREDS = {
   pypi:  { user: 'cgr-pypi-user',  pass: 'cgr-pypi-pass'  },
 };
 
+function getPlatformToken() { return localStorage.getItem('cgr-platform-token') || ''; }
+
+async function savePlatformToken() {
+  const val = document.getElementById('platform-token').value.trim();
+  localStorage.setItem('cgr-platform-token', val);
+  const el = document.getElementById('platform-token-status');
+  // Also push to server so it can use it for auto-refresh scheduling
+  try {
+    const res = await fetch('/api/platform-token', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token: val }),
+    });
+    const data = await res.json();
+    if (val && data.status?.expiresAt) {
+      const exp = new Date(data.status.expiresAt);
+      el.className = 'save-status ok';
+      el.textContent = `✓ Saved — expires ${exp.toLocaleTimeString()}`;
+    } else {
+      el.className = 'save-status ok';
+      el.textContent = val ? '✓ Saved' : 'Cleared';
+    }
+  } catch {
+    el.className = 'save-status ok';
+    el.textContent = val ? '✓ Saved (offline)' : 'Cleared';
+  }
+  setTimeout(() => { el.className = 'save-status'; el.textContent = ''; }, 4000);
+}
+
 function getCreds(eco) {
   return {
     user: localStorage.getItem(CREDS[eco].user) || '',
@@ -1169,6 +1211,7 @@ for (const [eco, keys] of Object.entries(CREDS)) {
   document.getElementById(`${eco}-cgr-user`).value = localStorage.getItem(keys.user) || '';
   document.getElementById(`${eco}-cgr-pass`).value = localStorage.getItem(keys.pass) || '';
 }
+document.getElementById('platform-token').value = getPlatformToken();
 
 // Intercept CGR download links — fetch via authenticated proxy and trigger a browser download
 document.addEventListener('click', async e => {
@@ -1239,7 +1282,7 @@ async function testCreds(eco, user, pass) {
       headers: { 'x-cgr-user': user, 'x-cgr-pass': pass },
     });
     if (res.status === 401) return { ok: false, message: '✗ Invalid credentials (401)' };
-    if (res.status === 403) return { ok: false, message: '✗ Access denied (403)' };
+    if (res.status === 403) return { ok: false, message: `✗ Access denied (403) — generate a ${eco}-specific pull token` };
     if (res.status >= 500) {
       const body = await res.text().catch(() => '');
       if (/failed to exchange token/i.test(body)) {
@@ -1586,7 +1629,7 @@ function npmCopyResults() {
   const { name, countNote, total, npmCount, cgrCount, cgrPct, cgrBuilt, builtPct, cgrMirror, mirrorPct, rows, latest } = s;
   const lines = [
     `${name} — ${countNote}`,
-    `npmjs.com: ${npmCount}  |  Chainguard: ${cgrPct}% (${cgrCount}/${total})  |  Built: ${builtPct}% (${cgrBuilt}/${cgrCount})  |  Mirrored: ${mirrorPct}% (${cgrMirror}/${cgrCount})`,
+    `npmjs.com: ${npmCount}  |  Chainguard: ${cgrPct}% (${cgrCount}/${total})  |  Built from Source: ${builtPct}% (${cgrBuilt}/${cgrCount})  |  Scanned Upstream: ${mirrorPct}% (${cgrMirror}/${cgrCount})`,
     '',
   ];
   const vw = Math.max(7, ...rows.map(r => r.version.length + (r.version === latest ? 9 : 0))) + 2;
@@ -1594,7 +1637,7 @@ function npmCopyResults() {
   lines.push('Version'.padEnd(vw) + 'Published'.padEnd(dw) + 'npmjs.com'.padEnd(12) + 'Chainguard');
   lines.push('─'.repeat(vw + dw + 22));
   for (const row of rows) {
-    const cgrLabel = !row.cgrTarball ? '✗' : row.cgrTarball.includes('javascript-upstream') ? '✓ Mirror' : '✓ Built';
+    const cgrLabel = !row.cgrTarball ? '✗' : row.cgrTarball.includes('javascript-upstream') ? '✓ Scanned Upstream' : '✓ Built from Source';
     lines.push((row.version + (row.version === latest ? ' (latest)' : '')).padEnd(vw) + (row.published ? formatDate(row.published) : '—').padEnd(dw) + (row.npmTarball ? '✓' : '✗').padEnd(12) + cgrLabel);
   }
   copyToClipboard(lines.join('\n'), document.getElementById('npm-copy-btn'));
@@ -1604,18 +1647,37 @@ document.getElementById('npm-show-all').addEventListener('change', () => { if (s
 document.getElementById('npm-show-malware').addEventListener('change', () => { if (state.npm.lastData) npmRenderTable(state.npm.lastData); });
 
 // Click-to-copy SRI integrity strings. Delegated so it survives re-renders.
+// Uses navigator.clipboard on secure origins, falls back to the legacy
+// textarea+execCommand trick on http (non-secure) origins like a remote
+// docker host accessed via plain http.
 document.getElementById('npm-results').addEventListener('click', e => {
   const t = e.target.closest?.('[data-sri]');
   if (!t) return;
   const sri = t.dataset.sri;
   if (!sri) return;
-  // Borrow copyToClipboard's flash by passing a temp shim that toggles a class
-  // on the actual element instead of changing its textContent (we don't want
-  // the truncated hash text to flip to "Copied!" — the tag span is fixed).
-  if (navigator.clipboard?.writeText) navigator.clipboard.writeText(sri);
-  t.classList.add('copied');
-  setTimeout(() => t.classList.remove('copied'), 900);
+  const flash = () => {
+    t.classList.add('copied');
+    setTimeout(() => t.classList.remove('copied'), 900);
+  };
+  if (navigator.clipboard?.writeText) {
+    navigator.clipboard.writeText(sri).then(flash, () => fallbackCopy(sri, flash));
+  } else {
+    fallbackCopy(sri, flash);
+  }
 });
+
+function fallbackCopy(text, onSuccess) {
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;opacity:0;top:0;left:0';
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    onSuccess?.();
+  } catch {}
+}
 document.getElementById('npm-show-prerelease').addEventListener('change', () => { if (state.npm.lastData) npmRenderTable(state.npm.lastData); });
 document.getElementById('npm-show-provenance').addEventListener('change', e => {
   if (!e.target.checked) {
@@ -1790,10 +1852,12 @@ async function mavenLookup(group, artifact) {
     e => { updateStep(stepId, 'fail'); return Promise.reject(e); }
   );
 
-  const [mvnMetaRes, cgrBuiltRes, cgrMirrorRes] = await Promise.allSettled([
+  const malPkg = `${group}/${artifact}`;
+  const [mvnMetaRes, cgrBuiltRes, cgrMirrorRes, malRes] = await Promise.allSettled([
     track(mavenFetchMetadata(group, artifact), 'step-maven'),
     track(mavenFetchCgr(group, artifact, 'java'), 'step-built'),
     track(mavenFetchCgr(group, artifact, 'java-upstream'), 'step-mirror'),
+    fetch(`/api/cgr-malware/check?package=${encodeURIComponent(malPkg)}&eco=maven`).then(r => r.json()),
   ]);
 
   const mvnAllVersions = mvnMetaRes.status === 'fulfilled' ? parseMetadataXml(mvnMetaRes.value) : [];
@@ -1807,6 +1871,14 @@ async function mavenLookup(group, artifact) {
   const cgrBuiltVersions  = cgrBuiltRes.status  === 'fulfilled' ? new Set(parseMetadataXml(cgrBuiltRes.value))  : new Set();
   const cgrMirrorVersions = cgrMirrorRes.status === 'fulfilled' ? new Set(parseMetadataXml(cgrMirrorRes.value)) : new Set();
 
+  const malRows = malRes.status === 'fulfilled' ? (malRes.value.rows || []) : [];
+  const malByVersion = new Map();
+  const malPackageWide = [];
+  for (const m of malRows) {
+    if (m.scope === 'package' || !m.version) malPackageWide.push(m);
+    else malByVersion.set(m.version, m);
+  }
+
   const allVersions = new Set([...mvnAllVersions, ...cgrBuiltVersions, ...cgrMirrorVersions]);
   const sorted = [...allVersions].sort(mavenVersionCompare).reverse();
 
@@ -1815,11 +1887,13 @@ async function mavenLookup(group, artifact) {
     rows: sorted.map(v => ({
       version: v, published: null,
       inMvn: mvnVersionSet.has(v),
-      cgrType: cgrBuiltVersions.has(v) ? 'built' : cgrMirrorVersions.has(v) ? 'mirror' : null,
+      cgrType: (cgrBuiltVersions.has(v) && !cgrMirrorVersions.has(v)) ? 'built' : cgrMirrorVersions.has(v) ? 'mirror' : null,
+      malware: malByVersion.get(v) || (malPackageWide[0] ? { ...malPackageWide[0], _packageWide: true } : null),
     })),
     mvnError: mvnMetaRes.status === 'rejected' ? mvnMetaRes.reason : null,
     cgrBuiltError:  cgrBuiltRes.status  === 'rejected' ? cgrBuiltRes.reason  : null,
     cgrMirrorError: cgrMirrorRes.status === 'rejected' ? cgrMirrorRes.reason : null,
+    malwarePackageWide: malPackageWide,
   };
 }
 
@@ -1876,15 +1950,16 @@ function mavenRenderTable(data) {
       <thead><tr>${sortableTh('maven','version','Version')}${sortableTh('maven','published','Published')}${sortableTh('maven','inMvn','Maven Central','text-align:center')}${sortableTh('maven','cgrType','Chainguard','text-align:center')}</tr></thead>
       <tbody>`;
 
+  const showMalware = document.getElementById('maven-show-malware').checked;
   for (const row of rows) {
     const isLatest = row.version === latest;
     const mvnUrl = row.inMvn ? `https://search.maven.org/artifact/${encodeURIComponent(group)}/${encodeURIComponent(artifact)}/${encodeURIComponent(row.version)}/jar` : null;
-    const cgrUrl = row.cgrType ? `https://libraries.cgr.dev/${row.cgrType === 'built' ? 'java' : 'java-upstream'}/${group.replace(/\./g,'/')}/${artifact}/${row.version}/` : null;
+    const cgrUrl = row.cgrType ? `https://libraries.cgr.dev/${row.cgrType === 'built' ? 'java' : 'java-upstream'}/${group.replace(/\./g,'/')}/${artifact}/${row.version}/${artifact}-${row.version}.pom` : null;
     html += `<tr${isLatest ? ' class="latest"' : ''}>`;
-    html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}</div></td>`;
+    html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}${showMalware ? malwareBadgeHtml(row.malware) : ''}</div></td>`;
     html += `<td class="date-cell"${row.published ? ` title="${escHtml(formatDateExact(row.published))}"` : ''}>${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
     html += `<td class="check-cell">${checkCell(mvnUrl)}</td>`;
-    html += `<td class="check-cell">${cgrCheckCell(row.cgrType, cgrUrl)}</td>`;
+    html += `<td class="check-cell">${cgrCheckCell(row.cgrType, cgrUrl, 'maven')}</td>`;
     html += `</tr>`;
   }
   html += `</tbody></table></div>`;
@@ -1899,7 +1974,7 @@ function mavenCopyResults() {
   const { name, countNote, total, mvnCount, cgrCount, cgrPct, cgrBuilt, builtPct, cgrMirror, mirrorPct, rows, latest } = s;
   const lines = [
     `${name} — ${countNote}`,
-    `Maven Central: ${mvnCount}  |  Chainguard: ${cgrPct}% (${cgrCount}/${total})  |  Built: ${builtPct}% (${cgrBuilt}/${cgrCount})  |  Mirrored: ${mirrorPct}% (${cgrMirror}/${cgrCount})`,
+    `Maven Central: ${mvnCount}  |  Chainguard: ${cgrPct}% (${cgrCount}/${total})  |  Built from Source: ${builtPct}% (${cgrBuilt}/${cgrCount})  |  Scanned Upstream: ${mirrorPct}% (${cgrMirror}/${cgrCount})`,
     '',
   ];
   const vw = Math.max(7, ...rows.map(r => r.version.length + (r.version === latest ? 9 : 0))) + 2;
@@ -1907,13 +1982,14 @@ function mavenCopyResults() {
   lines.push('Version'.padEnd(vw) + 'Published'.padEnd(dw) + 'Maven Central'.padEnd(16) + 'Chainguard');
   lines.push('─'.repeat(vw + dw + 26));
   for (const row of rows) {
-    lines.push((row.version + (row.version === latest ? ' (latest)' : '')).padEnd(vw) + (row.published ? formatDate(row.published) : '—').padEnd(dw) + (row.inMvn ? '✓' : '✗').padEnd(16) + (!row.cgrType ? '✗' : row.cgrType === 'built' ? '✓ Built' : '✓ Mirror'));
+    lines.push((row.version + (row.version === latest ? ' (latest)' : '')).padEnd(vw) + (row.published ? formatDate(row.published) : '—').padEnd(dw) + (row.inMvn ? '✓' : '✗').padEnd(16) + (!row.cgrType ? '✗' : row.cgrType === 'built' ? '✓ Built from Source' : '✓ Scanned Upstream'));
   }
   copyToClipboard(lines.join('\n'), document.getElementById('maven-copy-btn'));
 }
 
 document.getElementById('maven-show-all').addEventListener('change', () => { if (state.maven.lastData) mavenRenderTable(state.maven.lastData); });
 document.getElementById('maven-show-prerelease').addEventListener('change', () => { if (state.maven.lastData) mavenRenderTable(state.maven.lastData); });
+document.getElementById('maven-show-malware').addEventListener('change', () => { if (state.maven.lastData) mavenRenderTable(state.maven.lastData); });
 
 document.getElementById('maven-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -2202,13 +2278,22 @@ async function pypiLookup(pkg) {
   const cgrUrl  = `/api/cgr-python/simple/${encodeURIComponent(pkg)}/`;
   const cgrHeaders = user ? { 'x-cgr-user': user, 'x-cgr-pass': pass } : {};
 
-  const [pypiRes, cgrRes] = await Promise.allSettled([
+  const [pypiRes, cgrRes, malRes] = await Promise.allSettled([
     fetch(pypiUrl).then(r => { if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.status = r.status; throw e; } return r.json(); }),
     fetch(cgrUrl, { headers: cgrHeaders }).then(r => { if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.status = r.status; throw e; } return r.text(); }),
+    fetch(`/api/cgr-malware/check?package=${encodeURIComponent(pkg)}&eco=pypi`).then(r => r.json()),
   ]);
 
   const pypiData = pypiRes.status === 'fulfilled' ? pypiRes.value : null;
   const cgrHtml  = cgrRes.status  === 'fulfilled' ? cgrRes.value  : null;
+
+  const malRows = malRes.status === 'fulfilled' ? (malRes.value.rows || []) : [];
+  const malByVersion = new Map();
+  const malPackageWide = [];
+  for (const m of malRows) {
+    if (m.scope === 'package' || !m.version) malPackageWide.push(m);
+    else malByVersion.set(m.version, m);
+  }
 
   const pypiReleases = pypiData?.releases || {};
   const pypiLatest   = pypiData?.info?.version || null;
@@ -2242,10 +2327,12 @@ async function pypiLookup(pkg) {
           wheelFilenames: cgrInfo.wheelFilenames,
           wheels:       cgrInfo.wheels,
         } : null,
+        malware: malByVersion.get(v) || (malPackageWide[0] ? { ...malPackageWide[0], _packageWide: true } : null),
       };
     }),
     pypiError: pypiRes.status === 'rejected' ? pypiRes.reason : null,
     cgrError:  cgrRes.status  === 'rejected' ? cgrRes.reason  : null,
+    malwarePackageWide: malPackageWide,
   };
 }
 
@@ -2348,14 +2435,15 @@ function pypiRenderTable(data) {
       <thead><tr>${sortableTh('pypi','version','Version')}${sortableTh('pypi','published','Published')}${sortableTh('pypi','pypiUrl','PyPI','text-align:center')}${sortableTh('pypi','cgrType','Chainguard','text-align:center')}<th>CGR platforms</th></tr></thead>
       <tbody>`;
 
+  const showMalware = document.getElementById('pypi-show-malware').checked;
   for (const row of rows) {
     const isLatest = row.version === latest;
     html += `<tr${isLatest ? ' class="latest"' : ''}>`;
-    html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}</div></td>`;
+    html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}${showMalware ? malwareBadgeHtml(row.malware) : ''}</div></td>`;
     html += `<td class="date-cell"${row.published ? ` title="${escHtml(formatDateExact(row.published))}"` : ''}>${row.published ? escHtml(formatDate(row.published)) : '<span style="color:#cbd5e1">—</span>'}</td>`;
     html += `<td class="check-cell">${checkCell(row.pypiUrl)}</td>`;
     const covered = hasCgrWheel(row);
-    html += `<td class="check-cell">${cgrCheckCell(covered ? row.cgrType : null, covered ? row.cgrTarball : null)}</td>`;
+    html += `<td class="check-cell">${cgrCheckCell(covered ? row.cgrType : null, covered ? row.cgrTarball : null, 'pypi')}</td>`;
     html += `<td>${pypiPlatformsCell(row.cgrPlatforms)}</td>`;
     html += `</tr>`;
   }
@@ -2371,7 +2459,7 @@ function pypiCopyResults() {
   const { name, countNote, total, pypiCount, cgrCount, cgrPct, cgrBuilt, builtPct, cgrMirror, mirrorPct, rows, latest } = s;
   const lines = [
     `${name} — ${countNote}`,
-    `PyPI: ${pypiCount}  |  Chainguard: ${cgrPct}% (${cgrCount}/${total})  |  Built: ${builtPct}% (${cgrBuilt}/${cgrCount})  |  Mirrored: ${mirrorPct}% (${cgrMirror}/${cgrCount})`,
+    `PyPI: ${pypiCount}  |  Chainguard: ${cgrPct}% (${cgrCount}/${total})  |  Built from Source: ${builtPct}% (${cgrBuilt}/${cgrCount})  |  Scanned Upstream: ${mirrorPct}% (${cgrMirror}/${cgrCount})`,
     '',
   ];
   const vw = Math.max(7, ...rows.map(r => r.version.length + (r.version === latest ? 9 : 0))) + 2;
@@ -2380,7 +2468,7 @@ function pypiCopyResults() {
   lines.push('─'.repeat(vw + dw + 20));
   for (const row of rows) {
     const covered = (row.cgrPlatforms?.wheelCount || 0) > 0;
-    const cgrLabel = !covered ? (row.cgrPlatforms?.hasSdist ? '✗ (sdist only)' : '✗') : row.cgrType === 'built' ? '✓ Built' : '✓ Mirror';
+    const cgrLabel = !covered ? (row.cgrPlatforms?.hasSdist ? '✗ (sdist only)' : '✗') : row.cgrType === 'built' ? '✓ Built from Source' : '✓ Scanned Upstream';
     lines.push((row.version + (row.version === latest ? ' (latest)' : '')).padEnd(vw) + (row.published ? formatDate(row.published) : '—').padEnd(dw) + (row.pypiUrl ? '✓' : '✗').padEnd(10) + cgrLabel);
   }
   copyToClipboard(lines.join('\n'), document.getElementById('pypi-copy-btn'));
@@ -2388,6 +2476,7 @@ function pypiCopyResults() {
 
 document.getElementById('pypi-show-all').addEventListener('change', () => { if (state.pypi.lastData) pypiRenderTable(state.pypi.lastData); });
 document.getElementById('pypi-show-prerelease').addEventListener('change', () => { if (state.pypi.lastData) pypiRenderTable(state.pypi.lastData); });
+document.getElementById('pypi-show-malware').addEventListener('change', () => { if (state.pypi.lastData) pypiRenderTable(state.pypi.lastData); });
 
 document.getElementById('pypi-form').addEventListener('submit', async (e) => {
   e.preventDefault();
@@ -2696,7 +2785,7 @@ function bulkRenderNpm(results, el) {
   html += `<div class="stat-block"><span class="stat-label">Packages</span><span class="stat-value">${total}</span></div>`;
   html += `<div class="stat-divider"></div>`;
   html += `<div class="stat-block"><span class="stat-label">Match in CGR</span><span class="stat-value">${matched} <span class="stat-pct">${matchedPct}%</span></span></div>`;
-  html += `<div class="stat-block stat-sub"><span class="stat-label">Built</span><span class="stat-value">${matchedBuilt} <span class="stat-pct built">${builtPct}%</span></span></div>`;
+  html += `<div class="stat-block stat-sub"><span class="stat-label">Built from Source</span><span class="stat-value">${matchedBuilt} <span class="stat-pct built">${builtPct}%</span></span></div>`;
   html += `<div class="stat-block stat-sub"><span class="stat-label">Mirrored</span><span class="stat-value">${matchedMirror} <span class="stat-pct mirror">${mirrorPct}%</span></span></div>`;
   html += `<div class="stat-block stat-sub"><span class="stat-label">Upgrade avail.</span><span class="stat-value">${upgradeable}</span></div>`;
   html += `<div class="stat-block stat-sub"><span class="stat-label">No coverage</span><span class="stat-value">${uncovered}</span></div>`;
@@ -2955,6 +3044,38 @@ async function malLoadStatus() {
   const s = await res.json();
   document.getElementById('mal-total').textContent = s.total.toLocaleString();
   document.getElementById('mal-last-sync').textContent = s.lastSyncAt ? malFmtDate(s.lastSyncAt) : 'never';
+
+  // Show token / staleness warning
+  const banners = document.getElementById('mal-banners');
+  const tok = s.platformToken;
+  const lastSyncMs = s.lastSyncAt ? new Date(s.lastSyncAt).getTime() : 0;
+  const staleHours = (Date.now() - lastSyncMs) / 3600000;
+  const existing = banners.querySelector('.mal-token-warn');
+  if (!tok?.set) {
+    if (!existing) {
+      const b = document.createElement('div');
+      b.className = 'banner warn mal-token-warn';
+      b.innerHTML = 'No Platform API token set — malware data may be out of date. Paste a token in Settings to enable sync. (<code>chainctl auth token --audience https://console-api.enforce.dev</code>)';
+      banners.prepend(b);
+    }
+  } else if (tok.expiresAt && new Date(tok.expiresAt) < new Date()) {
+    if (!existing) {
+      const b = document.createElement('div');
+      b.className = 'banner warn mal-token-warn';
+      b.innerHTML = `Platform API token expired — paste a fresh one in Settings to sync. Last sync: ${malFmtDate(s.lastSyncAt)}.`;
+      banners.prepend(b);
+    }
+  } else if (staleHours > 24 && s.total > 0) {
+    if (!existing) {
+      const b = document.createElement('div');
+      b.className = 'banner warn mal-token-warn';
+      b.textContent = `Malware DB last updated ${malFmtDate(s.lastSyncAt)} — click "Update Malware DB" to refresh.`;
+      banners.prepend(b);
+    }
+  } else if (existing) {
+    existing.remove();
+  }
+
   return s;
 }
 
@@ -3165,10 +3286,13 @@ async function malPollSyncUntilDone() {
 }
 
 async function malRunSync({ full = false } = {}) {
-  const { user, pass } = getCreds('npm');
-  if (!user) {
+  const platformToken = getPlatformToken();
+  const body = { full };
+  if (platformToken) body.platformToken = platformToken;
+
+  if (!platformToken) {
     document.getElementById('mal-banners').innerHTML =
-      `<div class="banner error">No npm credentials configured. Open settings (gear icon) and save a Chainguard javascript pull-token first.</div>`;
+      `<div class="banner error">No Platform API token set — paste one in Settings (Malware API section) first. Get one with: <code>chainctl auth token --audience https://console-api.enforce.dev</code></div>`;
     return;
   }
   document.getElementById('mal-banners').innerHTML = '';
@@ -3188,12 +3312,12 @@ async function malRunSync({ full = false } = {}) {
   try {
     const res = await fetch('/api/cgr-malware/sync', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-cgr-user': user, 'x-cgr-pass': pass },
-      body: JSON.stringify(full ? { full: true } : {}),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
-      const body = await res.text();
-      throw new Error(body || `HTTP ${res.status}`);
+      const text = await res.text();
+      throw new Error(text || `HTTP ${res.status}`);
     }
   } catch (err) {
     refreshBtn.disabled = false;

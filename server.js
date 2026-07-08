@@ -34,66 +34,135 @@ const insertMalware = db.prepare(`
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
 
+// ── Platform API token (server-side storage + auto-refresh) ───────────────────
+
+// Platform API ecosystem values and their DB names
+const PLATFORM_ECOSYSTEMS = [
+  { apiName: 'npm',   dbName: 'npm'   },
+  { apiName: 'Maven', dbName: 'Maven' },
+  { apiName: 'PyPI',  dbName: 'PyPI'  },
+];
+
+let platformToken = process.env.PLATFORM_API_TOKEN || null;
+let platformTokenExpiry = null; // Unix timestamp (ms)
+let tokenRefreshTimer = null;
+
+function parsePlatformTokenExpiry(token) {
+  try {
+    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
+    return payload.exp ? payload.exp * 1000 : null;
+  } catch { return null; }
+}
+
+function setPlatformToken(token) {
+  platformToken = token || null;
+  platformTokenExpiry = token ? parsePlatformTokenExpiry(token) : null;
+  if (tokenRefreshTimer) { clearTimeout(tokenRefreshTimer); tokenRefreshTimer = null; }
+  if (platformTokenExpiry) scheduleTokenRefresh();
+}
+
+async function refreshPlatformTokenViaChainctl() {
+  try {
+    const proc = Bun.spawn(['chainctl', 'auth', 'token', '--audience', 'https://console-api.enforce.dev'], {
+      stdout: 'pipe', stderr: 'pipe',
+    });
+    const text = await new Response(proc.stdout).text();
+    const code = await proc.exited;
+    if (code !== 0) throw new Error(`chainctl exited ${code}`);
+    const token = text.trim();
+    if (!token) throw new Error('empty token');
+    setPlatformToken(token);
+    console.log('Platform token refreshed via chainctl, expires', new Date(platformTokenExpiry).toISOString());
+    return token;
+  } catch (err) {
+    console.error('chainctl token refresh failed:', err.message);
+    return null;
+  }
+}
+
+function scheduleTokenRefresh() {
+  if (!platformTokenExpiry) return;
+  const refreshAt = platformTokenExpiry - 5 * 60 * 1000; // 5 min before expiry
+  const delay = Math.max(0, refreshAt - Date.now());
+  tokenRefreshTimer = setTimeout(async () => {
+    await refreshPlatformTokenViaChainctl();
+  }, delay);
+}
+
+// Seed from env var on startup
+if (platformToken) {
+  platformTokenExpiry = parsePlatformTokenExpiry(platformToken);
+  if (platformTokenExpiry) scheduleTokenRefresh();
+}
+
+// ── Malware sync ──────────────────────────────────────────────────────────────
+
 const syncState = { running: false, fetched: 0, total: 0, error: null, startedAt: null, finishedAt: null };
 
 function malwareStatus() {
-  const row = db.prepare(`SELECT COUNT(*) AS total, MAX(blocked_at) AS latest FROM malware WHERE ecosystem = 'npm'`).get();
+  const counts = db.prepare(`SELECT ecosystem, COUNT(*) AS n, MAX(blocked_at) AS latest FROM malware GROUP BY ecosystem`).all();
+  const byEco = Object.fromEntries(counts.map(r => [r.ecosystem, { total: r.n, latest: r.latest }]));
+  const total = counts.reduce((s, r) => s + r.n, 0);
   const lastSync = db.prepare(`SELECT value FROM sync_meta WHERE key = 'last_sync_at'`).get();
-  return {
-    total: row.total,
-    latest: row.latest,
-    lastSyncAt: lastSync?.value || null,
-    sync: { ...syncState },
-  };
+  const tokenStatus = platformToken
+    ? { set: true, expiresAt: platformTokenExpiry ? new Date(platformTokenExpiry).toISOString() : null }
+    : { set: false };
+  return { total, byEco, lastSyncAt: lastSync?.value || null, sync: { ...syncState }, platformToken: tokenStatus };
 }
 
-async function runMalwareSync({ user, pass, since, ecosystem = 'javascript' }) {
+const SCOPE_NORM = { 'MALWARE_SCOPE_VERSION': 'version', 'MALWARE_SCOPE_PACKAGE': 'package', 'MALWARE_SCOPE_UNKNOWN': '' };
+function normScope(s) { return SCOPE_NORM[s] ?? s ?? ''; }
+
+function insertItems(items, ecoName) {
+  const tx = db.transaction(rows => {
+    for (const it of rows) {
+      insertMalware.run(
+        it.package_name ?? it.packageName,
+        it.version ?? '',
+        normScope(it.scope),
+        it.malid ?? '',
+        it.source ?? null,
+        it.blocked_at ?? it.blockedAt,
+        it.ecosystem || ecoName,
+        JSON.stringify(it.reason || []),
+        it.description ?? null,
+      );
+    }
+  });
+  tx(items);
+  syncState.fetched += items.length;
+}
+
+async function runMalwareSync({ token, full = false }) {
   if (syncState.running) throw new Error('Sync already in progress');
+  if (!token) throw new Error('No platform token available');
   syncState.running = true;
   syncState.fetched = 0;
   syncState.total = 0;
   syncState.error = null;
   syncState.startedAt = new Date().toISOString();
   syncState.finishedAt = null;
-
-  const auth = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
-  // Map UI ecosystem name to API path segment (only javascript is exposed today).
-  const apiBase = `https://libraries.cgr.dev/${ecosystem}/-/api/malware`;
-  const ecoName = ecosystem === 'javascript' ? 'npm' : ecosystem;
-
+  const apiBase = 'https://console-api.enforce.dev/libraries/v1/malware/blocklist';
   try {
-    let pageToken = null;
-    let yielded = 0;
-    while (true) {
-      const params = new URLSearchParams();
-      if (since) params.set('since', since);
-      if (pageToken) params.set('page_token', pageToken);
-      params.set('page_size', '500');
-      const res = await fetch(`${apiBase}?${params}`, { headers: { Authorization: auth } });
-      if (!res.ok) throw new Error(`HTTP ${res.status} from malware API`);
-      const data = await res.json();
-      if (typeof data.total_count === 'number') syncState.total = data.total_count;
-      const items = data.items || [];
-      const tx = db.transaction(rows => {
-        for (const it of rows) {
-          insertMalware.run(
-            it.package_name,
-            it.version ?? '',
-            it.scope ?? null,
-            it.malid ?? '',
-            it.source ?? null,
-            it.blocked_at,
-            it.ecosystem || ecoName,
-            JSON.stringify(it.reason || []),
-            it.description ?? null,
-          );
-        }
-      });
-      tx(items);
-      yielded += items.length;
-      syncState.fetched = yielded;
-      if (!data.next_page_token || items.length === 0) break;
-      pageToken = data.next_page_token;
+    for (const { apiName, dbName } of PLATFORM_ECOSYSTEMS) {
+      let since = '2026-01-01T00:00:00Z';
+      if (!full) {
+        const latest = db.prepare(`SELECT MAX(blocked_at) AS m FROM malware WHERE ecosystem = ?`).get(dbName);
+        if (latest?.m) since = latest.m;
+      }
+      let pageToken = null;
+      while (true) {
+        const params = new URLSearchParams({ ecosystem: apiName, pageSize: '500' });
+        if (since) params.set('since', since);
+        if (pageToken) params.set('pageToken', pageToken);
+        const res = await fetch(`${apiBase}?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+        if (!res.ok) throw new Error(`HTTP ${res.status} from Platform API (${apiName})`);
+        const data = await res.json();
+        const items = data.items || [];
+        insertItems(items, dbName);
+        if (!data.nextPageToken || items.length === 0) break;
+        pageToken = data.nextPageToken;
+      }
     }
     db.prepare(`INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('last_sync_at', ?)`).run(new Date().toISOString());
   } catch (err) {
@@ -362,27 +431,36 @@ Bun.serve({
       return new Response(JSON.stringify(malwareStatus()), { headers: { 'Content-Type': 'application/json' } });
     }
 
+    // Platform token management
+    if (url.pathname === '/api/platform-token' && req.method === 'POST') {
+      const body = await req.json().catch(() => ({}));
+      const token = (body.token || '').trim();
+      setPlatformToken(token || null);
+      return new Response(JSON.stringify({ ok: true, status: malwareStatus().platformToken }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    if (url.pathname === '/api/platform-token/refresh' && req.method === 'POST') {
+      const token = await refreshPlatformTokenViaChainctl();
+      if (!token) return new Response(JSON.stringify({ error: 'chainctl refresh failed — check server logs' }), { status: 500, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ ok: true, status: malwareStatus().platformToken }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
     // Malware cache sync (fire-and-forget). Server kicks off the sync in the
     // background; client polls /api/cgr-malware/status for progress.
     if (url.pathname === '/api/cgr-malware/sync' && req.method === 'POST') {
       if (syncState.running) {
         return new Response(JSON.stringify({ error: 'Sync already in progress', status: malwareStatus() }), { status: 409, headers: { 'Content-Type': 'application/json' } });
       }
-      const user = req.headers.get('x-cgr-user') || '';
-      const pass = req.headers.get('x-cgr-pass') || '';
-      if (!user) return new Response(JSON.stringify({ error: 'Missing credentials' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
-
       const body = await req.json().catch(() => ({}));
-      const fullSync = body.full === true;
-      let since = body.since || '2026-01-01T00:00:00Z';
-      if (!fullSync) {
-        const latest = db.prepare(`SELECT MAX(blocked_at) AS m FROM malware WHERE ecosystem = 'npm'`).get();
-        if (latest?.m) since = latest.m;
-      }
+      const full = body.full === true;
+      // Client can supply a token to override the server-stored one (e.g. fresh paste from settings)
+      const token = (body.platformToken || '').trim() || platformToken;
+      if (body.platformToken?.trim()) setPlatformToken(body.platformToken.trim());
+      if (!token) return new Response(JSON.stringify({ error: 'No platform token set — paste one in Settings first' }), { status: 401, headers: { 'Content-Type': 'application/json' } });
 
-      runMalwareSync({ user, pass, since }).catch(() => { /* err captured in syncState.error */ });
+      runMalwareSync({ token, full }).catch(() => { /* err captured in syncState.error */ });
 
-      return new Response(JSON.stringify({ started: true, since, status: malwareStatus() }), { status: 202, headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ started: true, status: malwareStatus() }), { status: 202, headers: { 'Content-Type': 'application/json' } });
     }
 
     // Malware search (filtered, server-side).
@@ -449,12 +527,14 @@ Bun.serve({
     // Used by the npm tab to badge versions/packages flagged as malware.
     if (url.pathname === '/api/cgr-malware/check') {
       const pkg = url.searchParams.get('package') || '';
+      const ecoParam = url.searchParams.get('eco') || 'npm';
+      const ecoDbName = ecoParam === 'maven' ? 'Maven' : ecoParam === 'pypi' ? 'PyPI' : 'npm';
       if (!pkg) return new Response(JSON.stringify({ rows: [] }), { headers: { 'Content-Type': 'application/json' } });
       const rows = db.prepare(`
         SELECT package_name, version, scope, malid, source, blocked_at, reason_json, description
         FROM malware
-        WHERE ecosystem = 'npm' AND package_name = ?
-      `).all(pkg);
+        WHERE ecosystem = ? AND package_name = ?
+      `).all(ecoDbName, pkg);
       const out = rows.map(r => ({ ...r, reason: JSON.parse(r.reason_json || '[]'), reason_json: undefined }));
       return new Response(JSON.stringify({ rows: out }), { headers: { 'Content-Type': 'application/json' } });
     }
