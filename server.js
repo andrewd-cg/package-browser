@@ -280,38 +280,57 @@ async function runMalwareSync({ token, full = false }) {
         ).all(dbName);
         db.prepare(`DELETE FROM malware WHERE ecosystem = ?`).run(dbName);
       }
-      let since = '2026-01-01T00:00:00Z';
-      if (!full) {
-        const latest = db.prepare(`SELECT MAX(blocked_at) AS m FROM malware WHERE ecosystem = ?`).get(dbName);
-        if (latest?.m) since = latest.m;
-      }
-      let pageToken = null;
-      while (true) {
-        const params = new URLSearchParams({ ecosystem: apiName, pageSize: '500' });
-        if (since) params.set('since', since);
-        if (pageToken) params.set('pageToken', pageToken);
-        const res = await fetch(`${apiBase}?${params}`, { headers: { Authorization: `Bearer ${token}` } });
-        if (!res.ok) {
-          let msg = `HTTP ${res.status} from Platform API (${apiName})`;
-          if (res.status === 401) {
-            if (platformTokenExpiry) {
-              const expired = platformTokenExpiry < Date.now();
-              const ts = new Date(platformTokenExpiry).toISOString();
-              msg += expired
-                ? ` — platform token expired at ${ts}, refresh with chainctl`
-                : ` — platform token is set (expires ${ts}) but was rejected; it may not have the right audience`;
-            } else {
-              msg += ` — platform token has no expiry info; it may be invalid or missing`;
-            }
-          }
-          throw new Error(msg);
+
+      // For full resyncs, walk in monthly windows to avoid cursor expiry on large sessions.
+      // For incremental syncs, one window from MAX(blocked_at) is fine (small delta).
+      let windows;
+      if (full) {
+        // Generate monthly windows from 2026-01-01 up to now+1d
+        windows = [];
+        let cursor = new Date('2026-01-01T00:00:00Z');
+        const end = new Date(Date.now() + 86400000);
+        while (cursor < end) {
+          const next = new Date(cursor);
+          next.setUTCMonth(next.getUTCMonth() + 1);
+          windows.push({ since: cursor.toISOString(), until: next > end ? end.toISOString() : next.toISOString() });
+          cursor = next;
         }
-        const data = await res.json();
-        const items = data.items || [];
-        insertItems(items, dbName);
-        if (!data.nextPageToken || items.length === 0) break;
-        pageToken = data.nextPageToken;
+      } else {
+        const latest = db.prepare(`SELECT MAX(blocked_at) AS m FROM malware WHERE ecosystem = ?`).get(dbName);
+        windows = [{ since: latest?.m || '2026-01-01T00:00:00Z', until: null }];
       }
+
+      for (const window of windows) {
+        let pageToken = null;
+        while (true) {
+          const params = new URLSearchParams({ ecosystem: apiName, pageSize: '500' });
+          params.set('since', window.since);
+          if (window.until) params.set('until', window.until);
+          if (pageToken) params.set('pageToken', pageToken);
+          const res = await fetch(`${apiBase}?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+          if (!res.ok) {
+            let msg = `HTTP ${res.status} from Platform API (${apiName})`;
+            if (res.status === 401) {
+              if (platformTokenExpiry) {
+                const expired = platformTokenExpiry < Date.now();
+                const ts = new Date(platformTokenExpiry).toISOString();
+                msg += expired
+                  ? ` — platform token expired at ${ts}, refresh with chainctl`
+                  : ` — platform token is set (expires ${ts}) but was rejected; it may not have the right audience`;
+              } else {
+                msg += ` — platform token has no expiry info; it may be invalid or missing`;
+              }
+            }
+            throw new Error(msg);
+          }
+          const data = await res.json();
+          const items = data.items || [];
+          insertItems(items, dbName);
+          if (!data.nextPageToken || items.length === 0) break;
+          pageToken = data.nextPageToken;
+        }
+      }
+
       if (full && savedPubDates?.length) {
         const restoreStmt = db.prepare(
           `UPDATE malware SET published_at = ? WHERE ecosystem = ? AND package_name = ? AND version = ?`
