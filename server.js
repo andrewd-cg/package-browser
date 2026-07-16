@@ -629,11 +629,16 @@ Bun.serve({
       const since = url.searchParams.get('since') || '';
       const until = url.searchParams.get('until') || '';
 
+      const pub_since = url.searchParams.get('pub_since') || '';
+      const pub_until = url.searchParams.get('pub_until') || '';
+
       const where = [`published_at IS NOT NULL`, `published_at NOT IN ('NOT_FOUND','ERROR')`, `blocked_at >= published_at`];
       const args = [];
-      if (eco)   { where.push('ecosystem = ?');   args.push(eco); }
-      if (since) { where.push('blocked_at >= ?'); args.push(since); }
-      if (until) { where.push('blocked_at <  ?'); args.push(until); }
+      if (eco)       { where.push('ecosystem = ?');    args.push(eco); }
+      if (since)     { where.push('blocked_at >= ?');  args.push(since); }
+      if (until)     { where.push('blocked_at <  ?');  args.push(until); }
+      if (pub_since) { where.push('published_at >= ?'); args.push(pub_since); }
+      if (pub_until) { where.push('published_at <  ?'); args.push(pub_until); }
       const whereSql = `WHERE ${where.join(' AND ')}`;
       const lagExpr = `(julianday(blocked_at) - julianday(published_at)) * 86400.0`;
 

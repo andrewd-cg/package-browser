@@ -100,6 +100,7 @@
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
   .mal-chart-tick { stroke: #e2e8f0; stroke-width: 1; }
+  .mal-lag-slider { accent-color: var(--accent); width: 160px; cursor: pointer; vertical-align: middle; }
   .mal-lag-histogram { display:flex; align-items:flex-end; gap:2px; height:60px; margin-top:0.5rem; }
   .mal-lag-bar { flex:1; background:var(--accent); opacity:0.8; border-radius:3px 3px 0 0; cursor:default; min-width:8px; transition:opacity 0.1s; }
   .mal-lag-bar:hover { opacity:1; }
@@ -883,6 +884,10 @@
         <span style="font-size:0.78rem; font-weight:600; color:#475569; text-transform:uppercase; letter-spacing:0.05em;">Detection Lag</span>
         <span id="mal-lag-enriched-count" style="font-size:0.75rem; color:#94a3b8; margin-left:0.75rem;"></span>
         <span style="flex:1"></span>
+        <label style="font-size:0.78rem; color:#64748b; display:flex; align-items:center; gap:0.5rem;">
+          <span id="mal-lag-window-label" style="white-space:nowrap;">All time</span>
+          <input type="range" id="mal-lag-window" class="mal-lag-slider" min="7" max="730" value="730" step="1">
+        </label>
         <button type="button" class="copy-btn" id="mal-enrich-btn">Enrich publish dates</button>
       </div>
       <div class="mal-bar" id="mal-enrich-progress" style="display:none; padding:0; margin-bottom:0.5rem;">
@@ -3261,6 +3266,13 @@ async function malLoadStats() {
   if (params.get('since')) statsParams.set('since', params.get('since'));
   if (params.get('until')) statsParams.set('until', params.get('until'));
 
+  const windowDays = parseInt(document.getElementById('mal-lag-window').value, 10);
+  const allTime = windowDays >= 730;
+  if (!allTime) {
+    const pubSince = new Date(Date.now() - windowDays * 86400000).toISOString().slice(0, 10) + 'T00:00:00Z';
+    statsParams.set('pub_since', pubSince);
+  }
+
   const [statsRes, enrichRes] = await Promise.allSettled([
     fetch(`/api/cgr-malware/stats?${statsParams}`).then(r => r.json()),
     fetch('/api/cgr-malware/enrich/status').then(r => r.json()),
@@ -3536,6 +3548,12 @@ document.getElementById('mal-clear-btn').addEventListener('click', () => {
 });
 ['mal-q', 'mal-version'].forEach(id => document.getElementById(id).addEventListener('input', () => malDispatchFilters()));
 ['mal-eco', 'mal-reason', 'mal-source', 'mal-since', 'mal-until', 'mal-exact'].forEach(id => document.getElementById(id).addEventListener('change', () => malDispatchFilters(true)));
+
+document.getElementById('mal-lag-window').addEventListener('input', function() {
+  const days = parseInt(this.value, 10);
+  document.getElementById('mal-lag-window-label').textContent = days >= 730 ? 'All time' : `Last ${days}d`;
+  malLoadStats();
+});
 document.getElementById('mal-prev-btn').addEventListener('click', () => { if (malState.page > 0) { malState.page--; malRunSearch(); } });
 document.getElementById('mal-next-btn').addEventListener('click', () => { malState.page++; malRunSearch(); });
 
