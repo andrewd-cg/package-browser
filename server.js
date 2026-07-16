@@ -107,7 +107,12 @@ async function runMalwareEnrich() {
   enrichState.finishedAt = null;
 
   try {
-    const pending = db.prepare(`SELECT DISTINCT ecosystem, package_name FROM malware WHERE published_at IS NULL`).all();
+    const pending = db.prepare(`
+      SELECT ecosystem, package_name FROM malware
+      WHERE published_at IS NULL
+      GROUP BY ecosystem, package_name
+      ORDER BY MAX(blocked_at) DESC
+    `).all();
     enrichState.total = pending.length;
 
     const updateStmt = db.prepare(`UPDATE malware SET published_at = ? WHERE ecosystem = ? AND package_name = ? AND version = ?`);
