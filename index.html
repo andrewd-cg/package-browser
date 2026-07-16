@@ -3401,10 +3401,16 @@ function malAttachEnrichPolling() {
     while (true) {
       const s = await fetch('/api/cgr-malware/enrich/status').then(r => r.json());
       const es = s.enrichState;
-      document.getElementById('mal-enrich-fill').style.width = es.total ? `${Math.min(100, Math.round(es.done / es.total * 100))}%` : '0%';
-      document.getElementById('mal-enrich-count').textContent = es.total
-        ? `${es.done.toLocaleString()} / ${es.total.toLocaleString()}`
-        : es.done.toLocaleString();
+      const pct = es.total ? Math.min(100, Math.round(es.done / es.total * 100)) : 0;
+      document.getElementById('mal-enrich-fill').style.width = `${pct}%`;
+      const elapsedS = es.startedAt ? Math.max(1, (Date.now() - new Date(es.startedAt).getTime()) / 1000) : 1;
+      const rate = es.done > 0 ? es.done / elapsedS : 0;
+      let countText = es.total ? `${es.done.toLocaleString()} / ${es.total.toLocaleString()}` : es.done.toLocaleString();
+      if (rate > 1 && es.total > es.done) {
+        const etaS = (es.total - es.done) / rate;
+        if (etaS > 5) countText += `  ·  ${fmtEta(etaS)} left`;
+      }
+      document.getElementById('mal-enrich-count').textContent = countText;
       document.getElementById('mal-lag-enriched-count').textContent =
         s.total > 0 ? `${s.enriched.toLocaleString()} / ${s.total.toLocaleString()} enriched` : '';
       if (!es.running) break;
@@ -3520,22 +3526,41 @@ function malScheduleSearch(immediate = false) {
   malSearchTimer = setTimeout(() => { malState.page = 0; malRunSearch(); }, immediate ? 0 : 250);
 }
 
-function malRenderSyncProgress(s) {
-  const progressFill  = document.getElementById('mal-sync-fill');
-  const progressCount = document.getElementById('mal-sync-count');
-  const { fetched, total } = s;
-  progressCount.textContent = total ? `${fetched.toLocaleString()} / ${total.toLocaleString()}` : fetched.toLocaleString();
-  progressFill.style.width = total ? `${Math.min(100, Math.round(fetched / total * 100))}%` : '0%';
+function fmtEta(s) {
+  if (s < 60)   return `~${Math.round(s)}s`;
+  if (s < 3600) return `~${Math.round(s / 60)}m`;
+  const h = Math.floor(s / 3600), m = Math.round((s % 3600) / 60);
+  return `~${h}h ${m}m`;
 }
 
-async function malPollSyncUntilDone() {
+function malRenderSyncProgress(sync, { estimatedTotal = 0 } = {}) {
+  const progressFill  = document.getElementById('mal-sync-fill');
+  const progressCount = document.getElementById('mal-sync-count');
+  const { fetched, startedAt } = sync;
+  const elapsedS = startedAt ? Math.max(1, (Date.now() - new Date(startedAt).getTime()) / 1000) : 1;
+  const rate = fetched > 0 ? fetched / elapsedS : 0;
+  const denom = Math.max(estimatedTotal, fetched);
+  const pct = denom > 0 ? Math.min(95, Math.round(fetched / denom * 100)) : 0;
+  progressFill.style.width = `${pct}%`;
+  let text = fetched.toLocaleString();
+  if (denom > fetched) text += ` / ~${denom.toLocaleString()}`;
+  if (rate > 10) text += `  ·  ${Math.round(rate).toLocaleString()}/s`;
+  if (rate > 10 && denom > fetched) {
+    const etaS = (denom - fetched) / rate;
+    if (etaS > 5) text += `  ·  ${fmtEta(etaS)} left`;
+  }
+  progressCount.textContent = text;
+}
+
+async function malPollSyncUntilDone({ preSyncTotal = 0 } = {}) {
   const progressWrap = document.getElementById('mal-sync-progress');
   const refreshBtn   = document.getElementById('mal-refresh-btn');
   const fullBtn      = document.getElementById('mal-full-btn');
   try {
     while (true) {
       const s = await (await fetch('/api/cgr-malware/status')).json();
-      malRenderSyncProgress(s.sync);
+      const estimatedTotal = Math.max(preSyncTotal, s.total, s.sync.fetched);
+      malRenderSyncProgress(s.sync, { estimatedTotal });
       document.getElementById('mal-total').textContent = s.total.toLocaleString();
       if (!s.sync.running) {
         if (s.sync.error) {
@@ -3582,6 +3607,9 @@ async function malRunSync({ full = false } = {}) {
   progressText.textContent = full ? 'Full sync from 2026-01-01…' : 'Syncing…';
   progressCount.textContent = '';
 
+  let preSyncTotal = 0;
+  try { preSyncTotal = (await fetch('/api/cgr-malware/status').then(r => r.json())).total; } catch {}
+
   try {
     const res = await fetch('/api/cgr-malware/sync', {
       method: 'POST',
@@ -3600,7 +3628,7 @@ async function malRunSync({ full = false } = {}) {
       `<div class="banner error">Sync failed: ${escHtml(err.message)}</div>`;
     return;
   }
-  await malPollSyncUntilDone();
+  await malPollSyncUntilDone({ preSyncTotal });
 }
 
 document.getElementById('mal-refresh-btn').addEventListener('click', () => malRunSync());
@@ -3667,8 +3695,8 @@ document.getElementById('mal-next-btn').addEventListener('click', () => { malSta
     fullBtn.disabled = true;
     progressWrap.style.display = 'flex';
     document.getElementById('mal-sync-text').textContent = 'Syncing…';
-    malRenderSyncProgress(s.sync);
-    malPollSyncUntilDone();
+    malRenderSyncProgress(s.sync, { estimatedTotal: s.total });
+    malPollSyncUntilDone({ preSyncTotal: s.total });
     return;
   }
   // Auto-sync on startup if creds available: full if empty, delta otherwise.
