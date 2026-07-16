@@ -100,6 +100,11 @@
     font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
   }
   .mal-chart-tick { stroke: #e2e8f0; stroke-width: 1; }
+  .mal-lag-histogram { display:flex; align-items:flex-end; gap:2px; height:60px; margin-top:0.5rem; }
+  .mal-lag-bar { flex:1; background:var(--accent); opacity:0.8; border-radius:3px 3px 0 0; cursor:default; min-width:8px; transition:opacity 0.1s; }
+  .mal-lag-bar:hover { opacity:1; }
+  .mal-lag-labels { display:flex; gap:2px; font-size:0.65rem; color:#94a3b8; margin-top:2px; }
+  .mal-lag-labels span { flex:1; text-align:center; overflow:hidden; }
 
   .bulk-progress {
     font-size: 0.85rem;
@@ -873,6 +878,28 @@
       <div class="mal-progress"><div id="mal-sync-fill" style="width:0%"></div></div>
       <span class="mal-stat" id="mal-sync-count"></span>
     </div>
+    <div id="mal-lag-panel" style="display:none; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:0.75rem 1rem; margin-bottom:0.75rem;">
+      <div class="mal-bar" style="margin-bottom:0.5rem; padding:0;">
+        <span style="font-size:0.78rem; font-weight:600; color:#475569; text-transform:uppercase; letter-spacing:0.05em;">Detection Lag</span>
+        <span id="mal-lag-enriched-count" style="font-size:0.75rem; color:#94a3b8; margin-left:0.75rem;"></span>
+        <span style="flex:1"></span>
+        <button type="button" class="copy-btn" id="mal-enrich-btn">Enrich publish dates</button>
+      </div>
+      <div class="mal-bar" id="mal-enrich-progress" style="display:none; padding:0; margin-bottom:0.5rem;">
+        <span id="mal-enrich-text" style="font-size:0.82rem; color:#64748b;">Fetching publish dates…</span>
+        <div class="mal-progress" style="flex:1;"><div id="mal-enrich-fill" style="width:0%"></div></div>
+        <span class="mal-stat" id="mal-enrich-count"></span>
+      </div>
+      <div style="display:flex; gap:1.5rem; flex-wrap:wrap; margin-bottom:0.5rem;">
+        <div><div style="font-size:0.7rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.04em;">Median lag</div><div style="font-size:1.1rem; font-weight:600; color:#1e293b;" id="mal-lag-median">—</div></div>
+        <div><div style="font-size:0.7rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.04em;">Mean lag</div><div style="font-size:1.1rem; font-weight:600; color:#1e293b;" id="mal-lag-mean">—</div></div>
+        <div><div style="font-size:0.7rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.04em;">P90 lag</div><div style="font-size:1.1rem; font-weight:600; color:#1e293b;" id="mal-lag-p90">—</div></div>
+        <div><div style="font-size:0.7rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.04em;">Enriched</div><div style="font-size:1.1rem; font-weight:600; color:#1e293b;" id="mal-lag-n">—</div></div>
+      </div>
+      <div class="mal-lag-histogram" id="mal-lag-histogram"></div>
+      <div class="mal-lag-labels" id="mal-lag-labels"></div>
+      <div id="mal-lag-eco-breakdown" style="margin-top:0.5rem; font-size:0.78rem; color:#64748b;"></div>
+    </div>
     <div id="mal-chart" class="mal-chart" style="display:none;">
       <svg id="mal-chart-svg" height="128"></svg>
     </div>
@@ -908,6 +935,7 @@
       <button type="button" class="copy-btn" id="mal-next-btn" disabled>Next →</button>
     </div>
     <div class="banners" id="mal-banners"></div>
+    <div id="mal-pkg-timeline" style="display:none; font-size:0.82rem; color:#475569; padding:0.4rem 0.75rem; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:6px; margin-bottom:0.5rem;"></div>
     <div class="results" id="mal-results">
       <div class="status-placeholder">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
@@ -3038,6 +3066,22 @@ function malFmtDate(iso) {
   return dateFmt.format(d);
 }
 
+function malFmtLag(seconds) {
+  if (seconds == null || isNaN(seconds) || seconds < 0) return '—';
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h`;
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function malCalcLag(publishedAt, blockedAt) {
+  if (!publishedAt || !blockedAt) return null;
+  const s = (Date.parse(blockedAt) - Date.parse(publishedAt)) / 1000;
+  return s >= 0 ? s : null;
+}
+
 function malRenderReason(r) {
   if (/^MAL-\d{4}-\d+$/i.test(r)) {
     return `<span class="mal-reason mal-id"><a href="https://osv.dev/vulnerability/${escHtml(r)}" target="_blank" rel="noopener">${escHtml(r)}</a></span>`;
@@ -3210,10 +3254,110 @@ async function malLoadChart() {
   }
 }
 
+async function malLoadStats() {
+  const params = malBuildFilterParams();
+  const statsParams = new URLSearchParams();
+  if (params.get('eco'))   statsParams.set('eco', params.get('eco'));
+  if (params.get('since')) statsParams.set('since', params.get('since'));
+  if (params.get('until')) statsParams.set('until', params.get('until'));
+
+  const [statsRes, enrichRes] = await Promise.allSettled([
+    fetch(`/api/cgr-malware/stats?${statsParams}`).then(r => r.json()),
+    fetch('/api/cgr-malware/enrich/status').then(r => r.json()),
+  ]);
+  const stats = statsRes.status === 'fulfilled' ? statsRes.value : null;
+  const enrichStatus = enrichRes.status === 'fulfilled' ? enrichRes.value : null;
+
+  const panel = document.getElementById('mal-lag-panel');
+  if (enrichStatus) {
+    const enrichBtn = document.getElementById('mal-enrich-btn');
+    if (enrichStatus.enrichState?.running && !enrichBtn.disabled) {
+      malAttachEnrichPolling();
+    }
+    document.getElementById('mal-lag-enriched-count').textContent =
+      enrichStatus.total > 0 ? `${enrichStatus.enriched.toLocaleString()} / ${enrichStatus.total.toLocaleString()} enriched` : '';
+  }
+
+  if (!stats || stats.overall.n === 0) {
+    if (enrichStatus?.total > 0) panel.style.display = 'block';
+    return;
+  }
+  panel.style.display = 'block';
+
+  document.getElementById('mal-lag-median').textContent = malFmtLag(stats.overall.median_s);
+  document.getElementById('mal-lag-mean').textContent   = malFmtLag(stats.overall.mean_s);
+  document.getElementById('mal-lag-p90').textContent    = malFmtLag(stats.overall.p90_s);
+  document.getElementById('mal-lag-n').textContent      = stats.overall.n.toLocaleString();
+
+  const BUCKET_ORDER = ['<1h','1-6h','6-24h','1-7d','7-30d','30-90d','>90d'];
+  const bucketMap = Object.fromEntries(stats.histogram.map(b => [b.bucket, b.n]));
+  const maxN = Math.max(1, ...BUCKET_ORDER.map(b => bucketMap[b] || 0));
+  document.getElementById('mal-lag-histogram').innerHTML = BUCKET_ORDER.map(b => {
+    const n = bucketMap[b] || 0;
+    const h = n > 0 ? Math.max(4, Math.round(n / maxN * 56)) : 0;
+    return `<div class="mal-lag-bar" style="height:${h}px" title="${escHtml(b)}: ${n.toLocaleString()}"></div>`;
+  }).join('');
+  document.getElementById('mal-lag-labels').innerHTML = BUCKET_ORDER.map(b => `<span>${escHtml(b)}</span>`).join('');
+
+  if (stats.byEco?.length > 1 && !params.get('eco')) {
+    document.getElementById('mal-lag-eco-breakdown').innerHTML = stats.byEco
+      .map(e => `<span style="margin-right:1rem"><strong>${escHtml(e.ecosystem)}</strong>: median ${malFmtLag(e.mean_s)} · n=${e.n.toLocaleString()}</span>`)
+      .join('');
+  } else {
+    document.getElementById('mal-lag-eco-breakdown').innerHTML = '';
+  }
+}
+
+function malAttachEnrichPolling() {
+  const btn = document.getElementById('mal-enrich-btn');
+  const progressWrap = document.getElementById('mal-enrich-progress');
+  btn.disabled = true;
+  progressWrap.style.display = 'flex';
+  (async () => {
+    while (true) {
+      const s = await fetch('/api/cgr-malware/enrich/status').then(r => r.json());
+      const es = s.enrichState;
+      document.getElementById('mal-enrich-fill').style.width = es.total ? `${Math.min(100, Math.round(es.done / es.total * 100))}%` : '0%';
+      document.getElementById('mal-enrich-count').textContent = es.total
+        ? `${es.done.toLocaleString()} / ${es.total.toLocaleString()}`
+        : es.done.toLocaleString();
+      document.getElementById('mal-lag-enriched-count').textContent =
+        s.total > 0 ? `${s.enriched.toLocaleString()} / ${s.total.toLocaleString()} enriched` : '';
+      if (!es.running) break;
+      await new Promise(r => setTimeout(r, 800));
+    }
+    btn.disabled = false;
+    setTimeout(() => { progressWrap.style.display = 'none'; }, 800);
+    await malLoadStats();
+    malRunSearch();
+  })();
+}
+
+async function malRunEnrich() {
+  const btn = document.getElementById('mal-enrich-btn');
+  btn.disabled = true;
+  document.getElementById('mal-enrich-text').textContent = 'Fetching publish dates…';
+  document.getElementById('mal-enrich-fill').style.width = '0%';
+  document.getElementById('mal-enrich-count').textContent = '';
+  try {
+    const res = await fetch('/api/cgr-malware/enrich', { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  } catch (err) {
+    btn.disabled = false;
+    document.getElementById('mal-banners').innerHTML =
+      `<div class="banner error">Enrichment failed: ${escHtml(err.message)}</div>`;
+    return;
+  }
+  malAttachEnrichPolling();
+}
+
+document.getElementById('mal-enrich-btn').addEventListener('click', malRunEnrich);
+
 function malDispatchFilters(immediate = false) {
   malScheduleSearch(immediate);
   malLoadChart();
   malLoadReasons();
+  malLoadStats();
 }
 
 async function malRunSearch() {
@@ -3233,22 +3377,57 @@ async function malRunSearch() {
   document.getElementById('mal-next-btn').disabled = end >= data.total;
 
   const el = document.getElementById('mal-results');
+  const timeline = document.getElementById('mal-pkg-timeline');
   if (data.rows.length === 0) {
     el.innerHTML = `<div class="mal-empty">No malware entries match these filters.</div>`;
+    timeline.style.display = 'none';
     return;
   }
+
+  const pkgLink = (name, eco) => {
+    if (eco === 'PyPI') return `https://pypi.org/project/${encodeURIComponent(name)}/`;
+    if (eco === 'Maven') { const [g, a] = name.split('/'); return `https://search.maven.org/artifact/${encodeURIComponent(g || name)}/${encodeURIComponent(a || '')}`; }
+    return `https://www.npmjs.com/package/${encodeURIComponent(name)}`;
+  };
+
   el.innerHTML = `<div class="table-wrap"><table>
     <thead><tr>
-      <th>Package</th><th>Version</th><th>Blocked at</th><th>Reasons</th>
+      <th>Package</th><th>Version</th><th>Blocked at</th><th>Published</th><th>Lag</th><th>Reasons</th>
     </tr></thead>
-    <tbody>${data.rows.map(r => `
-      <tr>
-        <td><a href="https://www.npmjs.com/package/${encodeURIComponent(r.package_name)}" target="_blank" rel="noopener" style="font-family:'SFMono-Regular',Consolas,monospace; font-size:0.82rem;">${escHtml(r.package_name)}</a></td>
+    <tbody>${data.rows.map(r => {
+      const lag = malCalcLag(r.published_at, r.blocked_at);
+      const pubDisplay = r.published_at ? escHtml(malFmtDate(r.published_at)) : '<span style="color:#cbd5e1">—</span>';
+      const pubTitle = r.published_at ? escHtml(formatDateExact(r.published_at)) : '';
+      const lagDisplay = lag != null ? escHtml(malFmtLag(lag)) : '<span style="color:#cbd5e1">—</span>';
+      return `<tr>
+        <td><a href="${escHtml(pkgLink(r.package_name, r.ecosystem))}" target="_blank" rel="noopener" style="font-family:'SFMono-Regular',Consolas,monospace; font-size:0.82rem;">${escHtml(r.package_name)}</a></td>
         <td title="${escHtml(r.version || '')}"><span class="mal-version-text">${escHtml(r.version || '—')}</span></td>
         <td style="font-size:0.8rem; white-space:nowrap;" title="${escHtml(r.blocked_at)}">${escHtml(malFmtDate(r.blocked_at))}</td>
+        <td style="font-size:0.8rem; white-space:nowrap;" title="${pubTitle}">${pubDisplay}</td>
+        <td style="font-size:0.8rem; white-space:nowrap;">${lagDisplay}</td>
         <td>${r.reason.map(malRenderReason).join(' ')}</td>
-      </tr>`).join('')}
+      </tr>`;
+    }).join('')}
     </tbody></table></div>`;
+
+  // Package timeline: show for exact-match single-package queries with enriched rows
+  const q = document.getElementById('mal-q').value.trim();
+  const exact = document.getElementById('mal-exact').checked;
+  const enrichedRows = data.rows.filter(r => r.published_at);
+  if (q && exact && enrichedRows.length > 0) {
+    const earliest = enrichedRows.reduce((a, b) => Date.parse(a.published_at) <= Date.parse(b.published_at) ? a : b);
+    const fastest = enrichedRows.reduce((a, b) => {
+      const la = malCalcLag(a.published_at, a.blocked_at) ?? Infinity;
+      const lb = malCalcLag(b.published_at, b.blocked_at) ?? Infinity;
+      return la <= lb ? a : b;
+    });
+    const fastestLag = malCalcLag(fastest.published_at, fastest.blocked_at);
+    timeline.style.display = 'block';
+    timeline.innerHTML = `<strong>Timeline for ${escHtml(q)}:</strong> first published ${escHtml(malFmtDate(earliest.published_at))}` +
+      (fastestLag != null ? ` · fastest detection: <strong>${escHtml(malFmtLag(fastestLag))}</strong> (v${escHtml(fastest.version || 'any')} blocked ${escHtml(malFmtDate(fastest.blocked_at))})` : '');
+  } else {
+    timeline.style.display = 'none';
+  }
 }
 
 let malSearchTimer = null;
@@ -3365,6 +3544,12 @@ document.getElementById('mal-next-btn').addEventListener('click', () => { malSta
   if (s.total > 0) {
     await malLoadReasons();
     malDispatchFilters(true);
+  }
+  // If enrichment is already running server-side, attach polling.
+  if (s.enrich?.state?.running) {
+    document.getElementById('mal-lag-panel').style.display = 'block';
+    document.getElementById('mal-enrich-text').textContent = 'Fetching publish dates…';
+    malAttachEnrichPolling();
   }
   // If a sync is already running server-side (started by another tab or before
   // a reload), attach polling without kicking off a new sync.

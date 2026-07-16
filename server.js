@@ -28,11 +28,126 @@ db.exec(`
   );
 `);
 
+// Migration: add published_at column if not present
+{
+  const hasPubCol = db.prepare(`SELECT 1 FROM pragma_table_info('malware') WHERE name='published_at'`).get();
+  if (!hasPubCol) {
+    db.exec(`
+      ALTER TABLE malware ADD COLUMN published_at TEXT;
+      CREATE INDEX IF NOT EXISTS idx_malware_published ON malware(published_at);
+    `);
+  }
+}
+
 const insertMalware = db.prepare(`
   INSERT OR REPLACE INTO malware
     (package_name, version, scope, malid, source, blocked_at, ecosystem, reason_json, description)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
 `);
+
+// ── Malware enrichment (publish-date fetch from registries) ──────────────────
+const enrichState = { running: false, done: 0, total: 0, failed: 0, error: null, startedAt: null, finishedAt: null };
+
+async function fetchNpmTimestamps(packageName) {
+  const res = await fetch(`https://registry.npmjs.org/${packageName}`);
+  if (!res.ok) return null;
+  const data = await res.json();
+  const time = data.time || {};
+  const skip = new Set(['created', 'modified', 'unpublished']);
+  const out = {};
+  for (const [k, v] of Object.entries(time)) {
+    if (!skip.has(k)) out[k] = v;
+  }
+  out[''] = time.created || null; // for package-wide blocks
+  return out;
+}
+
+async function fetchPypiTimestamps(packageName) {
+  const res = await fetch(`https://pypi.org/pypi/${encodeURIComponent(packageName)}/json`);
+  if (!res.ok) return null;
+  const data = await res.json();
+  const releases = data.releases || {};
+  const out = {};
+  for (const [ver, files] of Object.entries(releases)) {
+    const uploadTime = files?.[0]?.upload_time;
+    if (uploadTime) out[ver] = uploadTime.endsWith('Z') ? uploadTime : uploadTime + 'Z';
+  }
+  const firstDate = Object.values(out).sort()[0] || null;
+  out[''] = firstDate;
+  return out;
+}
+
+async function fetchMavenTimestamps(packageName) {
+  const slashIdx = packageName.indexOf('/');
+  if (slashIdx < 0) return null;
+  const group = packageName.slice(0, slashIdx);
+  const artifact = packageName.slice(slashIdx + 1);
+  const q = encodeURIComponent(`g:${group} AND a:${artifact}`);
+  const res = await fetch(`https://search.maven.org/solrsearch/select?q=${q}&core=gav&rows=200&sort=timestamp+asc&wt=json`);
+  if (!res.ok) return null;
+  const data = await res.json();
+  const docs = data.response?.docs || [];
+  const out = {};
+  for (const doc of docs) {
+    if (doc.v && doc.timestamp) out[doc.v] = new Date(doc.timestamp).toISOString();
+  }
+  const times = Object.values(out).sort();
+  out[''] = times[0] || null;
+  return out;
+}
+
+async function runMalwareEnrich() {
+  if (enrichState.running) throw new Error('Enrichment already in progress');
+  enrichState.running = true;
+  enrichState.done = 0;
+  enrichState.total = 0;
+  enrichState.failed = 0;
+  enrichState.error = null;
+  enrichState.startedAt = new Date().toISOString();
+  enrichState.finishedAt = null;
+
+  try {
+    const pending = db.prepare(`SELECT DISTINCT ecosystem, package_name FROM malware WHERE published_at IS NULL`).all();
+    enrichState.total = pending.length;
+
+    const updateStmt = db.prepare(`UPDATE malware SET published_at = ? WHERE ecosystem = ? AND package_name = ? AND version = ?`);
+
+    const BATCH = 20;
+    for (let i = 0; i < pending.length; i += BATCH) {
+      const batch = pending.slice(i, i + BATCH);
+      await Promise.allSettled(batch.map(async ({ ecosystem, package_name }) => {
+        try {
+          let timeMap;
+          if (ecosystem === 'npm')        timeMap = await fetchNpmTimestamps(package_name);
+          else if (ecosystem === 'PyPI')  timeMap = await fetchPypiTimestamps(package_name);
+          else                            timeMap = await fetchMavenTimestamps(package_name);
+
+          const versions = db.prepare(
+            `SELECT version FROM malware WHERE ecosystem = ? AND package_name = ? AND published_at IS NULL`
+          ).all(ecosystem, package_name);
+
+          db.transaction(() => {
+            for (const { version } of versions) {
+              updateStmt.run(timeMap?.[version] ?? 'NOT_FOUND', ecosystem, package_name, version);
+            }
+          })();
+        } catch {
+          db.prepare(`UPDATE malware SET published_at = 'ERROR' WHERE ecosystem = ? AND package_name = ? AND published_at IS NULL`)
+            .run(ecosystem, package_name);
+          enrichState.failed++;
+        }
+        enrichState.done++;
+      }));
+      await new Promise(r => setTimeout(r, 0));
+    }
+  } catch (err) {
+    enrichState.error = err.message;
+    throw err;
+  } finally {
+    enrichState.running = false;
+    enrichState.finishedAt = new Date().toISOString();
+  }
+}
 
 // ── Platform API token (server-side storage + auto-refresh) ───────────────────
 
@@ -107,7 +222,15 @@ function malwareStatus() {
   const tokenStatus = platformToken
     ? { set: true, expiresAt: platformTokenExpiry ? new Date(platformTokenExpiry).toISOString() : null }
     : { set: false };
-  return { total, byEco, lastSyncAt: lastSync?.value || null, sync: { ...syncState }, platformToken: tokenStatus };
+  const enrichCounts = db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      COUNT(CASE WHEN published_at IS NOT NULL AND published_at NOT IN ('NOT_FOUND','ERROR') THEN 1 END) AS enriched,
+      COUNT(CASE WHEN published_at IS NULL THEN 1 END) AS pending,
+      COUNT(CASE WHEN published_at IN ('NOT_FOUND','ERROR') THEN 1 END) AS unavailable
+    FROM malware
+  `).get();
+  return { total, byEco, lastSyncAt: lastSync?.value || null, sync: { ...syncState }, platformToken: tokenStatus, enrich: { ...enrichCounts, state: { ...enrichState } } };
 }
 
 const SCOPE_NORM = { 'MALWARE_SCOPE_VERSION': 'version', 'MALWARE_SCOPE_PACKAGE': 'package', 'MALWARE_SCOPE_UNKNOWN': '' };
@@ -145,7 +268,11 @@ async function runMalwareSync({ token, full = false }) {
   const apiBase = 'https://console-api.enforce.dev/libraries/v1/malware/blocklist';
   try {
     for (const { apiName, dbName } of PLATFORM_ECOSYSTEMS) {
+      let savedPubDates = null;
       if (full) {
+        savedPubDates = db.prepare(
+          `SELECT package_name, version, published_at FROM malware WHERE ecosystem = ? AND published_at IS NOT NULL`
+        ).all(dbName);
         db.prepare(`DELETE FROM malware WHERE ecosystem = ?`).run(dbName);
       }
       let since = '2026-01-01T00:00:00Z';
@@ -165,6 +292,14 @@ async function runMalwareSync({ token, full = false }) {
         insertItems(items, dbName);
         if (!data.nextPageToken || items.length === 0) break;
         pageToken = data.nextPageToken;
+      }
+      if (full && savedPubDates?.length) {
+        const restoreStmt = db.prepare(
+          `UPDATE malware SET published_at = ? WHERE ecosystem = ? AND package_name = ? AND version = ?`
+        );
+        db.transaction(() => {
+          for (const row of savedPubDates) restoreStmt.run(row.published_at, dbName, row.package_name, row.version);
+        })();
       }
     }
     db.prepare(`INSERT OR REPLACE INTO sync_meta (key, value) VALUES ('last_sync_at', ?)`).run(new Date().toISOString());
@@ -466,6 +601,92 @@ Bun.serve({
       return new Response(JSON.stringify({ started: true, status: malwareStatus() }), { status: 202, headers: { 'Content-Type': 'application/json' } });
     }
 
+    // Malware enrichment (fire-and-forget).
+    if (url.pathname === '/api/cgr-malware/enrich' && req.method === 'POST') {
+      if (enrichState.running) {
+        return new Response(JSON.stringify({ error: 'Enrichment already in progress', state: enrichState }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+      }
+      runMalwareEnrich().catch(() => {});
+      return new Response(JSON.stringify({ started: true, state: enrichState }), { status: 202, headers: { 'Content-Type': 'application/json' } });
+    }
+
+    // Enrichment status.
+    if (url.pathname === '/api/cgr-malware/enrich/status') {
+      const counts = db.prepare(`
+        SELECT
+          COUNT(*) AS total,
+          COUNT(CASE WHEN published_at IS NOT NULL AND published_at NOT IN ('NOT_FOUND','ERROR') THEN 1 END) AS enriched,
+          COUNT(CASE WHEN published_at IS NULL THEN 1 END) AS pending,
+          COUNT(CASE WHEN published_at IN ('NOT_FOUND','ERROR') THEN 1 END) AS unavailable
+        FROM malware
+      `).get();
+      return new Response(JSON.stringify({ ...counts, enrichState: { ...enrichState } }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    // Detection lag statistics.
+    if (url.pathname === '/api/cgr-malware/stats') {
+      const eco   = url.searchParams.get('eco')   || '';
+      const since = url.searchParams.get('since') || '';
+      const until = url.searchParams.get('until') || '';
+
+      const where = [`published_at IS NOT NULL`, `published_at NOT IN ('NOT_FOUND','ERROR')`, `blocked_at >= published_at`];
+      const args = [];
+      if (eco)   { where.push('ecosystem = ?');   args.push(eco); }
+      if (since) { where.push('blocked_at >= ?'); args.push(since); }
+      if (until) { where.push('blocked_at <  ?'); args.push(until); }
+      const whereSql = `WHERE ${where.join(' AND ')}`;
+      const lagExpr = `(julianday(blocked_at) - julianday(published_at)) * 86400.0`;
+
+      const overall = db.prepare(
+        `SELECT COUNT(*) AS n, AVG(${lagExpr}) AS mean_s, MIN(${lagExpr}) AS min_s, MAX(${lagExpr}) AS max_s FROM malware ${whereSql}`
+      ).get(...args);
+
+      const medianRow = overall.n > 0 ? db.prepare(`
+        WITH ranked AS (
+          SELECT ${lagExpr} AS lag_s, ROW_NUMBER() OVER (ORDER BY ${lagExpr}) AS rn, COUNT(*) OVER () AS total
+          FROM malware ${whereSql}
+        )
+        SELECT AVG(lag_s) AS median_s FROM ranked WHERE rn IN ((total+1)/2, (total+2)/2)
+      `).get(...args) : null;
+
+      const p90Row = overall.n > 0 ? db.prepare(`
+        WITH ranked AS (
+          SELECT ${lagExpr} AS lag_s, ROW_NUMBER() OVER (ORDER BY ${lagExpr}) AS rn, COUNT(*) OVER () AS total
+          FROM malware ${whereSql}
+        )
+        SELECT lag_s AS p90_s FROM ranked WHERE rn = CAST(CEIL(total * 0.9) AS INTEGER) LIMIT 1
+      `).get(...args) : null;
+
+      const byEco = db.prepare(
+        `SELECT ecosystem, COUNT(*) AS n, AVG(${lagExpr}) AS mean_s, MIN(${lagExpr}) AS min_s, MAX(${lagExpr}) AS max_s FROM malware ${whereSql} GROUP BY ecosystem`
+      ).all(...args);
+
+      const histogram = db.prepare(`
+        SELECT
+          CASE
+            WHEN ${lagExpr} < 3600    THEN '<1h'
+            WHEN ${lagExpr} < 21600   THEN '1-6h'
+            WHEN ${lagExpr} < 86400   THEN '6-24h'
+            WHEN ${lagExpr} < 604800  THEN '1-7d'
+            WHEN ${lagExpr} < 2592000 THEN '7-30d'
+            WHEN ${lagExpr} < 7776000 THEN '30-90d'
+            ELSE '>90d'
+          END AS bucket,
+          COUNT(*) AS n
+        FROM malware ${whereSql}
+        GROUP BY bucket
+      `).all(...args);
+
+      const BUCKET_ORDER = ['<1h','1-6h','6-24h','1-7d','7-30d','30-90d','>90d'];
+      histogram.sort((a, b) => BUCKET_ORDER.indexOf(a.bucket) - BUCKET_ORDER.indexOf(b.bucket));
+
+      return new Response(JSON.stringify({
+        overall: { ...overall, median_s: medianRow?.median_s ?? null, p90_s: p90Row?.p90_s ?? null },
+        byEco,
+        histogram,
+      }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
     // Malware search (filtered, server-side).
     if (url.pathname === '/api/cgr-malware/search') {
       const eco     = url.searchParams.get('eco')     || '';
@@ -491,12 +712,18 @@ Bun.serve({
 
       const total = db.prepare(`SELECT COUNT(*) AS n FROM malware ${whereSql}`).get(...args).n;
       const rows  = db.prepare(`
-        SELECT package_name, version, scope, malid, source, blocked_at, ecosystem, reason_json, description
+        SELECT package_name, version, scope, malid, source, blocked_at, ecosystem, reason_json, description, published_at
         FROM malware ${whereSql}
         ORDER BY blocked_at DESC
         LIMIT ? OFFSET ?
       `).all(...args, limit, offset);
-      const out = rows.map(r => ({ ...r, reason: JSON.parse(r.reason_json || '[]'), reason_json: undefined }));
+      const SENTINELS = new Set(['NOT_FOUND', 'ERROR']);
+      const out = rows.map(r => ({
+        ...r,
+        reason: JSON.parse(r.reason_json || '[]'),
+        reason_json: undefined,
+        published_at: (r.published_at && !SENTINELS.has(r.published_at)) ? r.published_at : null,
+      }));
       return new Response(JSON.stringify({ total, rows: out, limit, offset }), { headers: { 'Content-Type': 'application/json' } });
     }
 
