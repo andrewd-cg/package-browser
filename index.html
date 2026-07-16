@@ -918,8 +918,8 @@
       <input type="text" id="mal-q" placeholder="Package name contains…" style="min-width:200px;">
       <input type="text" id="mal-version" placeholder="Version contains…" style="min-width:140px;">
       <select id="mal-source" style="min-width:160px;">
-        <option value="chainguard">Sentinel (chainguard)</option>
         <option value="">All sources</option>
+        <option value="chainguard">Sentinel (chainguard)</option>
         <option value="osv">OSV advisories</option>
         <option value="manual">Manual</option>
       </select>
@@ -3546,7 +3546,7 @@ document.getElementById('mal-clear-btn').addEventListener('click', () => {
   document.getElementById('mal-q').value = '';
   document.getElementById('mal-version').value = '';
   document.getElementById('mal-reason').value = '';
-  document.getElementById('mal-source').value = 'chainguard';
+  document.getElementById('mal-source').value = '';
   document.getElementById('mal-since').value = '';
   document.getElementById('mal-until').value = '';
   document.getElementById('mal-exact').checked = false;
