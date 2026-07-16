@@ -3259,7 +3259,12 @@ async function malLoadChart() {
   }
 }
 
+let _malStatsAbort = null;
 async function malLoadStats() {
+  if (_malStatsAbort) { _malStatsAbort.abort(); }
+  _malStatsAbort = new AbortController();
+  const { signal } = _malStatsAbort;
+
   const params = malBuildFilterParams();
   const statsParams = new URLSearchParams();
   if (params.get('eco'))   statsParams.set('eco', params.get('eco'));
@@ -3274,9 +3279,10 @@ async function malLoadStats() {
   }
 
   const [statsRes, enrichRes] = await Promise.allSettled([
-    fetch(`/api/cgr-malware/stats?${statsParams}`).then(r => r.json()),
-    fetch('/api/cgr-malware/enrich/status').then(r => r.json()),
+    fetch(`/api/cgr-malware/stats?${statsParams}`, { signal }).then(r => r.json()),
+    fetch('/api/cgr-malware/enrich/status', { signal }).then(r => r.json()),
   ]);
+  if (signal.aborted) return;
   const stats = statsRes.status === 'fulfilled' ? statsRes.value : null;
   const enrichStatus = enrichRes.status === 'fulfilled' ? enrichRes.value : null;
 
@@ -3549,10 +3555,12 @@ document.getElementById('mal-clear-btn').addEventListener('click', () => {
 ['mal-q', 'mal-version'].forEach(id => document.getElementById(id).addEventListener('input', () => malDispatchFilters()));
 ['mal-eco', 'mal-reason', 'mal-source', 'mal-since', 'mal-until', 'mal-exact'].forEach(id => document.getElementById(id).addEventListener('change', () => malDispatchFilters(true)));
 
+let _malStatsTimer = null;
 document.getElementById('mal-lag-window').addEventListener('input', function() {
   const days = parseInt(this.value, 10);
   document.getElementById('mal-lag-window-label').textContent = days >= 730 ? 'All time' : `Last ${days}d`;
-  malLoadStats();
+  clearTimeout(_malStatsTimer);
+  _malStatsTimer = setTimeout(malLoadStats, 300);
 });
 document.getElementById('mal-prev-btn').addEventListener('click', () => { if (malState.page > 0) { malState.page--; malRunSearch(); } });
 document.getElementById('mal-next-btn').addEventListener('click', () => { malState.page++; malRunSearch(); });
