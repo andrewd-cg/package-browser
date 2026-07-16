@@ -755,7 +755,7 @@ Bun.serve({
       if (src)   { where.push('source = ?');          args.push(src); }
       if (since) { where.push('blocked_at >= ?');     args.push(since); }
       if (until) { where.push('blocked_at <  ?');     args.push(until); }
-      const whereSql = `WHERE ${where.join(' AND ')}`;
+      const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
       const rows = db.prepare(`
         SELECT substr(blocked_at, 1, 10) AS day, COUNT(*) AS n
         FROM malware ${whereSql}
