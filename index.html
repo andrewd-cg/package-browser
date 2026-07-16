@@ -101,6 +101,10 @@
   }
   .mal-chart-tick { stroke: #e2e8f0; stroke-width: 1; }
   .mal-lag-slider { accent-color: var(--accent); width: 160px; cursor: pointer; vertical-align: middle; }
+  .mal-source-chips { display:flex; gap:0.35rem; flex-wrap:wrap; margin-bottom:0.5rem; }
+  .mal-source-chip { font-size:0.72rem; padding:2px 9px; border-radius:12px; border:1px solid #e2e8f0; background:#fff; color:#64748b; cursor:pointer; transition:all 0.12s; }
+  .mal-source-chip.active { color:#fff; border-color:transparent; }
+  .mal-lag-seg { transition:height 0.2s; }
   .mal-lag-histogram { display:flex; align-items:flex-end; gap:2px; height:60px; margin-top:0.5rem; }
   .mal-lag-bar { flex:1; background:var(--accent); opacity:0.8; border-radius:3px 3px 0 0; cursor:default; min-width:8px; transition:opacity 0.1s; }
   .mal-lag-bar:hover { opacity:1; }
@@ -885,8 +889,8 @@
         <span id="mal-lag-enriched-count" style="font-size:0.75rem; color:#94a3b8; margin-left:0.75rem;"></span>
         <span style="flex:1"></span>
         <label style="font-size:0.78rem; color:#64748b; display:flex; align-items:center; gap:0.5rem;">
-          <span id="mal-lag-window-label" style="white-space:nowrap;">All time</span>
-          <input type="range" id="mal-lag-window" class="mal-lag-slider" min="7" max="730" value="730" step="1">
+          <span id="mal-lag-window-label" style="white-space:nowrap;">Last 14d</span>
+          <input type="range" id="mal-lag-window" class="mal-lag-slider" min="7" max="730" value="14" step="1">
         </label>
         <button type="button" class="copy-btn" id="mal-enrich-btn">Enrich publish dates</button>
       </div>
@@ -900,6 +904,13 @@
         <div><div style="font-size:0.7rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.04em;">Mean lag</div><div style="font-size:1.1rem; font-weight:600; color:#1e293b;" id="mal-lag-mean">—</div></div>
         <div><div style="font-size:0.7rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.04em;">P90 lag</div><div style="font-size:1.1rem; font-weight:600; color:#1e293b;" id="mal-lag-p90">—</div></div>
         <div><div style="font-size:0.7rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.04em;">Enriched</div><div style="font-size:1.1rem; font-weight:600; color:#1e293b;" id="mal-lag-n">—</div></div>
+      </div>
+      <div class="mal-source-chips" id="mal-lag-source-chips">
+        <button class="mal-source-chip active" data-source="" style="background:#475569;">All sources</button>
+        <button class="mal-source-chip" data-source="chainguard" data-color="#3b82f6">● Sentinel</button>
+        <button class="mal-source-chip" data-source="osv" data-color="#f59e0b">● OSV</button>
+        <button class="mal-source-chip" data-source="manual" data-color="#94a3b8">● Manual</button>
+        <button class="mal-source-chip" data-source="ossf-commits" data-color="#a855f7">● OSSF</button>
       </div>
       <div class="mal-lag-histogram" id="mal-lag-histogram"></div>
       <div class="mal-lag-labels" id="mal-lag-labels"></div>
@@ -3259,6 +3270,15 @@ async function malLoadChart() {
   }
 }
 
+const SOURCE_COLORS = {
+  chainguard: '#3b82f6',
+  osv:        '#f59e0b',
+  manual:     '#94a3b8',
+  'ossf-commits': '#a855f7',
+  unknown:    '#cbd5e1',
+};
+let _malLagSource = '';
+
 let _malStatsAbort = null;
 async function malLoadStats() {
   if (_malStatsAbort) { _malStatsAbort.abort(); }
@@ -3270,6 +3290,7 @@ async function malLoadStats() {
   if (params.get('eco'))   statsParams.set('eco', params.get('eco'));
   if (params.get('since')) statsParams.set('since', params.get('since'));
   if (params.get('until')) statsParams.set('until', params.get('until'));
+  if (_malLagSource)       statsParams.set('source', _malLagSource);
 
   const windowDays = parseInt(document.getElementById('mal-lag-window').value, 10);
   const allTime = windowDays >= 730;
@@ -3308,12 +3329,26 @@ async function malLoadStats() {
   document.getElementById('mal-lag-n').textContent      = stats.overall.n.toLocaleString();
 
   const BUCKET_ORDER = ['<1h','1-6h','6-24h','1-7d','7-30d','30-90d','>90d'];
-  const bucketMap = Object.fromEntries(stats.histogram.map(b => [b.bucket, b.n]));
-  const maxN = Math.max(1, ...BUCKET_ORDER.map(b => bucketMap[b] || 0));
+  const bucketMap = Object.fromEntries(stats.histogram.map(b => [b.bucket, b]));
+  const maxN = Math.max(1, ...BUCKET_ORDER.map(b => bucketMap[b]?.n || 0));
   document.getElementById('mal-lag-histogram').innerHTML = BUCKET_ORDER.map(b => {
-    const n = bucketMap[b] || 0;
-    const h = n > 0 ? Math.max(4, Math.round(n / maxN * 56)) : 0;
-    return `<div class="mal-lag-bar" style="height:${h}px" title="${escHtml(b)}: ${n.toLocaleString()}"></div>`;
+    const entry = bucketMap[b] || { n: 0, bySource: {} };
+    const h = entry.n > 0 ? Math.max(4, Math.round(entry.n / maxN * 56)) : 0;
+    if (h === 0) return `<div class="mal-lag-bar" style="height:0px"></div>`;
+    if (_malLagSource) {
+      // Solid bar for filtered source
+      const color = SOURCE_COLORS[_malLagSource] || 'var(--accent)';
+      return `<div class="mal-lag-bar" style="height:${h}px; background:${escHtml(color)};" title="${escHtml(b)}: ${entry.n.toLocaleString()}"></div>`;
+    }
+    // Stacked bar — segments from bottom (fastest) to top, ordered by source
+    const sources = Object.entries(entry.bySource).sort((a, b) => b[1] - a[1]);
+    const segs = sources.map(([src, n]) => {
+      const segH = Math.max(1, Math.round(n / entry.n * h));
+      const color = SOURCE_COLORS[src] || '#cbd5e1';
+      return `<div class="mal-lag-seg" style="height:${segH}px; background:${escHtml(color)}; width:100%;" title="${escHtml(src)}: ${n.toLocaleString()}"></div>`;
+    }).join('');
+    const tip = sources.map(([src, n]) => `${src}: ${n.toLocaleString()}`).join(', ');
+    return `<div class="mal-lag-bar" style="height:${h}px; display:flex; flex-direction:column-reverse; overflow:hidden; padding:0; background:transparent;" title="${escHtml(b)} — ${escHtml(tip)}">${segs}</div>`;
   }).join('');
   document.getElementById('mal-lag-labels').innerHTML = BUCKET_ORDER.map(b => `<span>${escHtml(b)}</span>`).join('');
 
@@ -3561,6 +3596,19 @@ document.getElementById('mal-lag-window').addEventListener('input', function() {
   document.getElementById('mal-lag-window-label').textContent = days >= 730 ? 'All time' : `Last ${days}d`;
   clearTimeout(_malStatsTimer);
   _malStatsTimer = setTimeout(malLoadStats, 300);
+});
+
+document.getElementById('mal-lag-source-chips').addEventListener('click', function(e) {
+  const chip = e.target.closest('.mal-source-chip');
+  if (!chip) return;
+  _malLagSource = chip.dataset.source;
+  for (const c of this.querySelectorAll('.mal-source-chip')) {
+    const color = c.dataset.color || '#475569';
+    c.classList.toggle('active', c === chip);
+    c.style.background = c === chip ? color : '';
+    c.style.borderColor = c === chip ? color : '';
+  }
+  malLoadStats();
 });
 document.getElementById('mal-prev-btn').addEventListener('click', () => { if (malState.page > 0) { malState.page--; malRunSearch(); } });
 document.getElementById('mal-next-btn').addEventListener('click', () => { malState.page++; malRunSearch(); });

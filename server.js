@@ -637,11 +637,14 @@ Bun.serve({
       const pub_since = url.searchParams.get('pub_since') || '';
       const pub_until = url.searchParams.get('pub_until') || '';
 
+      const source = url.searchParams.get('source') || '';
+
       const where = [`published_at IS NOT NULL`, `published_at NOT IN ('NOT_FOUND','ERROR')`, `blocked_at >= published_at`];
       const args = [];
-      if (eco)       { where.push('ecosystem = ?');    args.push(eco); }
-      if (since)     { where.push('blocked_at >= ?');  args.push(since); }
-      if (until)     { where.push('blocked_at <  ?');  args.push(until); }
+      if (eco)       { where.push('ecosystem = ?');     args.push(eco); }
+      if (source)    { where.push('source = ?');        args.push(source); }
+      if (since)     { where.push('blocked_at >= ?');   args.push(since); }
+      if (until)     { where.push('blocked_at <  ?');   args.push(until); }
       if (pub_since) { where.push('published_at >= ?'); args.push(pub_since); }
       if (pub_until) { where.push('published_at <  ?'); args.push(pub_until); }
       const whereSql = `WHERE ${where.join(' AND ')}`;
@@ -668,27 +671,35 @@ Bun.serve({
       `).get(...args) : null;
 
       const byEco = db.prepare(
-        `SELECT ecosystem, COUNT(*) AS n, AVG(${lagExpr}) AS mean_s, MIN(${lagExpr}) AS min_s, MAX(${lagExpr}) AS max_s FROM malware ${whereSql} GROUP BY ecosystem`
+        `SELECT ecosystem, COUNT(*) AS n, AVG(${lagExpr}) AS mean_s FROM malware ${whereSql} GROUP BY ecosystem`
       ).all(...args);
 
-      const histogram = db.prepare(`
-        SELECT
-          CASE
-            WHEN ${lagExpr} < 3600    THEN '<1h'
-            WHEN ${lagExpr} < 21600   THEN '1-6h'
-            WHEN ${lagExpr} < 86400   THEN '6-24h'
-            WHEN ${lagExpr} < 604800  THEN '1-7d'
-            WHEN ${lagExpr} < 2592000 THEN '7-30d'
-            WHEN ${lagExpr} < 7776000 THEN '30-90d'
-            ELSE '>90d'
-          END AS bucket,
-          COUNT(*) AS n
+      // Histogram grouped by (bucket, source) so the UI can render stacked bars
+      const BUCKET_ORDER = ['<1h','1-6h','6-24h','1-7d','7-30d','30-90d','>90d'];
+      const bucketExpr = `CASE
+        WHEN ${lagExpr} < 3600    THEN '<1h'
+        WHEN ${lagExpr} < 21600   THEN '1-6h'
+        WHEN ${lagExpr} < 86400   THEN '6-24h'
+        WHEN ${lagExpr} < 604800  THEN '1-7d'
+        WHEN ${lagExpr} < 2592000 THEN '7-30d'
+        WHEN ${lagExpr} < 7776000 THEN '30-90d'
+        ELSE '>90d'
+      END`;
+      const histRaw = db.prepare(`
+        SELECT ${bucketExpr} AS bucket, COALESCE(source, 'unknown') AS src, COUNT(*) AS n
         FROM malware ${whereSql}
-        GROUP BY bucket
+        GROUP BY bucket, src
       `).all(...args);
 
-      const BUCKET_ORDER = ['<1h','1-6h','6-24h','1-7d','7-30d','30-90d','>90d'];
-      histogram.sort((a, b) => BUCKET_ORDER.indexOf(a.bucket) - BUCKET_ORDER.indexOf(b.bucket));
+      const histMap = {};
+      for (const r of histRaw) {
+        if (!histMap[r.bucket]) histMap[r.bucket] = { bucket: r.bucket, n: 0, bySource: {} };
+        histMap[r.bucket].n += r.n;
+        histMap[r.bucket].bySource[r.src] = r.n;
+      }
+      const histogram = BUCKET_ORDER
+        .map(b => histMap[b] || { bucket: b, n: 0, bySource: {} })
+        .filter(b => b.n > 0);
 
       return new Response(JSON.stringify({
         overall: { ...overall, median_s: medianRow?.median_s ?? null, p90_s: p90Row?.p90_s ?? null },
