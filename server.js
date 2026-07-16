@@ -291,7 +291,21 @@ async function runMalwareSync({ token, full = false }) {
         if (since) params.set('since', since);
         if (pageToken) params.set('pageToken', pageToken);
         const res = await fetch(`${apiBase}?${params}`, { headers: { Authorization: `Bearer ${token}` } });
-        if (!res.ok) throw new Error(`HTTP ${res.status} from Platform API (${apiName})`);
+        if (!res.ok) {
+          let msg = `HTTP ${res.status} from Platform API (${apiName})`;
+          if (res.status === 401) {
+            if (platformTokenExpiry) {
+              const expired = platformTokenExpiry < Date.now();
+              const ts = new Date(platformTokenExpiry).toISOString();
+              msg += expired
+                ? ` — platform token expired at ${ts}, refresh with chainctl`
+                : ` — platform token is set (expires ${ts}) but was rejected; it may not have the right audience`;
+            } else {
+              msg += ` — platform token has no expiry info; it may be invalid or missing`;
+            }
+          }
+          throw new Error(msg);
+        }
         const data = await res.json();
         const items = data.items || [];
         insertItems(items, dbName);

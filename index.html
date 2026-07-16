@@ -738,6 +738,7 @@
       <input type="password" id="platform-token" placeholder="eyJ…" autocomplete="off" style="width:320px">
       <button class="save-btn" id="platform-token-save-btn" onclick="savePlatformToken()">Save</button>
       <span class="save-status" id="platform-token-status"></span>
+      <span class="save-status" id="platform-token-live-status" style="margin-left:0.5rem;"></span>
       <code class="cred-hint">chainctl auth token --audience https://console-api.enforce.dev</code>
       <button type="button" class="copy-btn cred-copy-btn" onclick="copyCredHint(this)">Copy</button>
     </div>
@@ -1223,30 +1224,58 @@ const CREDS = {
 
 function getPlatformToken() { return localStorage.getItem('cgr-platform-token') || ''; }
 
+function renderPlatformTokenStatus(tok) {
+  const el = document.getElementById('platform-token-live-status');
+  if (!tok?.set) {
+    el.className = 'save-status error';
+    el.textContent = '✗ Not set — sync will fail';
+    return;
+  }
+  if (!tok.expiresAt) {
+    el.className = 'save-status ok';
+    el.textContent = '✓ Set (no expiry info)';
+    return;
+  }
+  const exp = new Date(tok.expiresAt);
+  const nowMs = Date.now();
+  if (exp.getTime() < nowMs) {
+    const agoMin = Math.round((nowMs - exp.getTime()) / 60000);
+    const agoStr = agoMin < 60 ? `${agoMin}m ago` : `${Math.round(agoMin / 60)}h ago`;
+    el.className = 'save-status error';
+    el.textContent = `✗ Platform token expired ${agoStr} — run: chainctl auth token --audience https://console-api.enforce.dev`;
+  } else {
+    const inMin = Math.round((exp.getTime() - nowMs) / 60000);
+    const inStr = inMin < 60 ? `${inMin}m` : `${Math.round(inMin / 60)}h`;
+    el.className = 'save-status ok';
+    el.textContent = `✓ Valid — expires in ${inStr} (${exp.toLocaleTimeString()})`;
+  }
+}
+
+async function refreshPlatformTokenStatus() {
+  try {
+    const s = await fetch('/api/cgr-malware/status').then(r => r.json());
+    renderPlatformTokenStatus(s.platformToken);
+  } catch { /* server unreachable */ }
+}
+
 async function savePlatformToken() {
   const val = document.getElementById('platform-token').value.trim();
   localStorage.setItem('cgr-platform-token', val);
   const el = document.getElementById('platform-token-status');
-  // Also push to server so it can use it for auto-refresh scheduling
   try {
     const res = await fetch('/api/platform-token', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ token: val }),
     });
     const data = await res.json();
-    if (val && data.status?.expiresAt) {
-      const exp = new Date(data.status.expiresAt);
-      el.className = 'save-status ok';
-      el.textContent = `✓ Saved — expires ${exp.toLocaleTimeString()}`;
-    } else {
-      el.className = 'save-status ok';
-      el.textContent = val ? '✓ Saved' : 'Cleared';
-    }
+    el.className = 'save-status ok';
+    el.textContent = '✓ Saved';
+    renderPlatformTokenStatus(data.status);
   } catch {
     el.className = 'save-status ok';
     el.textContent = val ? '✓ Saved (offline)' : 'Cleared';
   }
-  setTimeout(() => { el.className = 'save-status'; el.textContent = ''; }, 4000);
+  setTimeout(() => { el.className = 'save-status'; el.textContent = ''; }, 3000);
 }
 
 function getCreds(eco) {
@@ -1298,7 +1327,9 @@ const settingsPanel = document.getElementById('settings-panel');
 settingsBtn.addEventListener('click', () => {
   settingsPanel.classList.toggle('open');
   settingsBtn.classList.toggle('active', settingsPanel.classList.contains('open'));
+  if (settingsPanel.classList.contains('open')) refreshPlatformTokenStatus();
 });
+refreshPlatformTokenStatus();
 
 const TEST_ENDPOINTS = {
   npm:   () => '/api/cgr/express',
