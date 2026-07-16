@@ -891,7 +891,7 @@
         <span style="flex:1"></span>
         <label style="font-size:0.78rem; color:#64748b; display:flex; align-items:center; gap:0.5rem;">
           <span id="mal-lag-window-label" style="white-space:nowrap;">Last 14d</span>
-          <input type="range" id="mal-lag-window" class="mal-lag-slider" min="7" max="730" value="14" step="1">
+          <input type="range" id="mal-lag-window" class="mal-lag-slider" min="1" max="730" value="14" step="1">
         </label>
         <button type="button" class="copy-btn" id="mal-enrich-btn">Enrich publish dates</button>
       </div>
@@ -3624,7 +3624,7 @@ document.getElementById('mal-clear-btn').addEventListener('click', () => {
 let _malStatsTimer = null;
 document.getElementById('mal-lag-window').addEventListener('input', function() {
   const days = parseInt(this.value, 10);
-  document.getElementById('mal-lag-window-label').textContent = days >= 730 ? 'All time' : `Last ${days}d`;
+  document.getElementById('mal-lag-window-label').textContent = days >= 730 ? 'All time' : days === 1 ? 'Last 1d' : `Last ${days}d`;
   clearTimeout(_malStatsTimer);
   _malStatsTimer = setTimeout(malLoadStats, 300);
 });
