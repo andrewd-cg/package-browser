@@ -101,6 +101,25 @@
   }
   .mal-chart-tick { stroke: #e2e8f0; stroke-width: 1; }
   .mal-lag-slider { accent-color: var(--accent); width: 160px; cursor: pointer; vertical-align: middle; }
+
+  /* Detection Lag tab */
+  .lag-stat-grid { display:flex; gap:0; flex-wrap:wrap; margin-bottom:1rem; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; }
+  .lag-stat-cell { flex:1; min-width:100px; padding:0.6rem 1rem; border-right:1px solid #e2e8f0; background:#fff; }
+  .lag-stat-cell:last-child { border-right:none; }
+  .lag-stat-cell .lsc-label { font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:2px; }
+  .lag-stat-cell .lsc-value { font-size:1.05rem; font-weight:700; color:#1e293b; }
+  .lag-stat-cell .lsc-value.good { color:#16a34a; }
+  .lag-chart-wrap { background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:1rem; margin-bottom:1rem; }
+  .lag-chart-axis { font-size:12px; fill:#64748b; font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+  .lag-chart-count { font-size:11px; fill:#475569; font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; font-weight:600; }
+  .lag-chart-bar { cursor:pointer; transition:opacity 0.1s; }
+  .lag-chart-bar:hover rect { opacity:1 !important; }
+  .lag-legend { display:flex; gap:1rem; flex-wrap:wrap; margin-top:0.5rem; font-size:0.75rem; color:#64748b; }
+  .lag-legend-item { display:flex; align-items:center; gap:4px; }
+  .lag-legend-dot { width:10px; height:10px; border-radius:2px; }
+  .lag-drilldown { background:#fff; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; margin-bottom:1rem; }
+  .lag-drilldown-header { padding:0.6rem 1rem; background:#f8fafc; border-bottom:1px solid #e2e8f0; font-size:0.82rem; color:#475569; font-weight:600; display:flex; align-items:center; gap:0.75rem; }
+  .lag-enrich-bar { background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:0.6rem 1rem; margin-bottom:0.75rem; display:flex; align-items:center; gap:0.75rem; font-size:0.8rem; color:#64748b; }
   .mal-source-chips { display:flex; gap:0.35rem; flex-wrap:wrap; margin-bottom:0.5rem; }
   .mal-source-chip { font-size:0.72rem; padding:2px 9px; border-radius:12px; border:1px solid #e2e8f0; background:#fff; color:#64748b; cursor:pointer; transition:all 0.12s; }
   .mal-source-chip.active { color:#fff; border-color:transparent; }
@@ -679,6 +698,7 @@
     <button class="tab-btn" data-tab="pypi">pypi</button>
     <button class="tab-btn" data-tab="bulk">bulk check</button>
     <button class="tab-btn" data-tab="malware">malware</button>
+    <button class="tab-btn" data-tab="lag">detection lag</button>
   </nav>
   <button id="settings-btn" title="Settings" aria-label="Settings">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -884,39 +904,6 @@
       <div class="mal-progress"><div id="mal-sync-fill" style="width:0%"></div></div>
       <span class="mal-stat" id="mal-sync-count"></span>
     </div>
-    <div id="mal-lag-panel" style="display:none; background:#f8fafc; border:1px solid #e2e8f0; border-radius:8px; padding:0.75rem 1rem; margin-bottom:0.75rem;">
-      <div class="mal-bar" style="margin-bottom:0.5rem; padding:0;">
-        <span style="font-size:0.78rem; font-weight:600; color:#475569; text-transform:uppercase; letter-spacing:0.05em;">Detection Lag</span>
-        <span id="mal-lag-enriched-count" style="font-size:0.75rem; color:#94a3b8; margin-left:0.75rem;"></span>
-        <span style="flex:1"></span>
-        <label style="font-size:0.78rem; color:#64748b; display:flex; align-items:center; gap:0.5rem;">
-          <span id="mal-lag-window-label" style="white-space:nowrap;">Last 14d</span>
-          <input type="range" id="mal-lag-window" class="mal-lag-slider" min="1" max="730" value="14" step="1">
-        </label>
-        <button type="button" class="copy-btn" id="mal-enrich-btn">Enrich publish dates</button>
-      </div>
-      <div class="mal-bar" id="mal-enrich-progress" style="display:none; padding:0; margin-bottom:0.5rem;">
-        <span id="mal-enrich-text" style="font-size:0.82rem; color:#64748b;">Fetching publish dates…</span>
-        <div class="mal-progress" style="flex:1;"><div id="mal-enrich-fill" style="width:0%"></div></div>
-        <span class="mal-stat" id="mal-enrich-count"></span>
-      </div>
-      <div style="display:flex; gap:1.5rem; flex-wrap:wrap; margin-bottom:0.5rem;">
-        <div><div style="font-size:0.7rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.04em;">Median lag</div><div style="font-size:1.1rem; font-weight:600; color:#1e293b;" id="mal-lag-median">—</div></div>
-        <div><div style="font-size:0.7rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.04em;">Mean lag</div><div style="font-size:1.1rem; font-weight:600; color:#1e293b;" id="mal-lag-mean">—</div></div>
-        <div><div style="font-size:0.7rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.04em;">P90 lag</div><div style="font-size:1.1rem; font-weight:600; color:#1e293b;" id="mal-lag-p90">—</div></div>
-        <div><div style="font-size:0.7rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.04em;">Enriched</div><div style="font-size:1.1rem; font-weight:600; color:#1e293b;" id="mal-lag-n">—</div></div>
-      </div>
-      <div class="mal-source-chips" id="mal-lag-source-chips">
-        <button class="mal-source-chip active" data-source="" style="background:#475569;">All sources</button>
-        <button class="mal-source-chip" data-source="chainguard" data-color="#3b82f6">● Sentinel</button>
-        <button class="mal-source-chip" data-source="osv" data-color="#f59e0b">● OSV</button>
-        <button class="mal-source-chip" data-source="manual" data-color="#94a3b8">● Manual</button>
-        <button class="mal-source-chip" data-source="ossf-commits" data-color="#a855f7">● OSSF</button>
-      </div>
-      <div class="mal-lag-histogram" id="mal-lag-histogram"></div>
-      <div class="mal-lag-labels" id="mal-lag-labels"></div>
-      <div id="mal-lag-eco-breakdown" style="margin-top:0.5rem; font-size:0.78rem; color:#64748b;"></div>
-    </div>
     <div id="mal-chart" class="mal-chart" style="display:none;">
       <svg id="mal-chart-svg" height="128"></svg>
     </div>
@@ -959,6 +946,79 @@
         Click <strong>Refresh</strong> to populate the local malware cache.
       </div>
     </div>
+  </div>
+
+  <!-- detection lag tab -->
+  <div id="tab-lag" class="tab-pane">
+    <!-- filter bar -->
+    <div class="mal-bar" style="flex-wrap:wrap; gap:0.4rem 0.75rem;">
+      <select id="lag-eco" style="min-width:140px;">
+        <option value="">All ecosystems</option>
+        <option value="npm">npm</option>
+        <option value="PyPI">PyPI</option>
+        <option value="Maven">Maven</option>
+      </select>
+      <div class="mal-source-chips" style="margin-bottom:0;" id="lag-source-chips">
+        <button class="mal-source-chip active" data-source="" style="background:#475569;">All sources</button>
+        <button class="mal-source-chip" data-source="chainguard" data-color="#3b82f6">● Sentinel</button>
+        <button class="mal-source-chip" data-source="osv" data-color="#f59e0b">● OSV</button>
+        <button class="mal-source-chip" data-source="manual" data-color="#94a3b8">● Manual</button>
+        <button class="mal-source-chip" data-source="ossf-commits" data-color="#a855f7">● OSSF</button>
+      </div>
+      <span style="flex:1"></span>
+      <span style="font-size:0.78rem;color:#64748b;">Blocked</span>
+      <input type="date" id="lag-since" style="font-size:0.82rem;">
+      <span style="font-size:0.78rem;color:#64748b;">to</span>
+      <input type="date" id="lag-until" style="font-size:0.82rem;">
+      <label style="font-size:0.78rem; color:#64748b; display:flex; align-items:center; gap:0.4rem; white-space:nowrap;">
+        Published: <span id="lag-window-label">Last 14d</span>
+        <input type="range" id="lag-window" class="mal-lag-slider" min="1" max="730" value="14" step="1">
+      </label>
+      <button type="button" class="copy-btn" id="lag-clear-btn">Clear</button>
+    </div>
+    <!-- enrichment bar -->
+    <div class="lag-enrich-bar" id="lag-enrich-bar">
+      <span id="lag-enriched-count" style="flex:1">—</span>
+      <button type="button" class="copy-btn" id="lag-enrich-btn">Enrich publish dates</button>
+    </div>
+    <div class="mal-bar" id="lag-enrich-progress" style="display:none; margin-bottom:0.75rem;">
+      <span id="lag-enrich-text" style="font-size:0.82rem;color:#64748b;">Fetching publish dates…</span>
+      <div class="mal-progress" style="flex:1;"><div id="lag-enrich-fill" style="width:0%"></div></div>
+      <span class="mal-stat" id="lag-enrich-count"></span>
+    </div>
+    <!-- stat cards -->
+    <div class="lag-stat-grid" id="lag-stat-grid">
+      <div class="lag-stat-cell"><div class="lsc-label">Enriched entries</div><div class="lsc-value" id="lsc-n">—</div></div>
+      <div class="lag-stat-cell"><div class="lsc-label">Median</div><div class="lsc-value" id="lsc-median">—</div></div>
+      <div class="lag-stat-cell"><div class="lsc-label">Mean</div><div class="lsc-value" id="lsc-mean">—</div></div>
+      <div class="lag-stat-cell"><div class="lsc-label">P90</div><div class="lsc-value" id="lsc-p90">—</div></div>
+      <div class="lag-stat-cell"><div class="lsc-label">P99</div><div class="lsc-value" id="lsc-p99">—</div></div>
+      <div class="lag-stat-cell"><div class="lsc-label">Within 1h</div><div class="lsc-value good" id="lsc-1h">—</div></div>
+      <div class="lag-stat-cell"><div class="lsc-label">Within 24h</div><div class="lsc-value good" id="lsc-24h">—</div></div>
+      <div class="lag-stat-cell"><div class="lsc-label">Within 7d</div><div class="lsc-value good" id="lsc-7d">—</div></div>
+      <div class="lag-stat-cell"><div class="lsc-label">Within 30d</div><div class="lsc-value good" id="lsc-30d">—</div></div>
+    </div>
+    <!-- big histogram -->
+    <div class="lag-chart-wrap">
+      <svg id="lag-chart-svg" style="display:block;width:100%;" height="280"></svg>
+      <div class="lag-legend" id="lag-legend"></div>
+    </div>
+    <!-- drill-down table (shown when a bar is clicked) -->
+    <div class="lag-drilldown" id="lag-drilldown" style="display:none;">
+      <div class="lag-drilldown-header">
+        <span id="lag-drilldown-title">Packages in bucket</span>
+        <span style="flex:1"></span>
+        <span id="lag-drilldown-count" style="font-weight:normal;color:#94a3b8;font-size:0.78rem;"></span>
+        <button type="button" class="copy-btn" id="lag-drilldown-close" style="margin-left:0.5rem;">✕ Close</button>
+      </div>
+      <div id="lag-drilldown-results" style="overflow-x:auto;"></div>
+      <div class="mal-bar" style="padding:0.5rem 1rem; border-top:1px solid #e2e8f0;">
+        <button type="button" class="copy-btn" id="lag-dd-prev" disabled>← Prev</button>
+        <span id="lag-dd-page-info" style="font-size:0.8rem;color:#94a3b8;">—</span>
+        <button type="button" class="copy-btn" id="lag-dd-next" disabled>Next →</button>
+      </div>
+    </div>
+    <div class="banners" id="lag-banners"></div>
   </div>
 </main>
 
@@ -3308,146 +3368,11 @@ const SOURCE_COLORS = {
   'ossf-commits': '#a855f7',
   unknown:    '#cbd5e1',
 };
-let _malLagSource = '';
-
-let _malStatsAbort = null;
-async function malLoadStats() {
-  if (_malStatsAbort) { _malStatsAbort.abort(); }
-  _malStatsAbort = new AbortController();
-  const { signal } = _malStatsAbort;
-
-  const params = malBuildFilterParams();
-  const statsParams = new URLSearchParams();
-  if (params.get('eco'))   statsParams.set('eco', params.get('eco'));
-  if (params.get('since')) statsParams.set('since', params.get('since'));
-  if (params.get('until')) statsParams.set('until', params.get('until'));
-  if (_malLagSource)       statsParams.set('source', _malLagSource);
-
-  const windowDays = parseInt(document.getElementById('mal-lag-window').value, 10);
-  const allTime = windowDays >= 730;
-  if (!allTime) {
-    const pubSince = new Date(Date.now() - windowDays * 86400000).toISOString().slice(0, 10) + 'T00:00:00Z';
-    statsParams.set('pub_since', pubSince);
-  }
-
-  const [statsRes, enrichRes] = await Promise.allSettled([
-    fetch(`/api/cgr-malware/stats?${statsParams}`, { signal }).then(r => r.json()),
-    fetch('/api/cgr-malware/enrich/status', { signal }).then(r => r.json()),
-  ]);
-  if (signal.aborted) return;
-  const stats = statsRes.status === 'fulfilled' ? statsRes.value : null;
-  const enrichStatus = enrichRes.status === 'fulfilled' ? enrichRes.value : null;
-
-  const panel = document.getElementById('mal-lag-panel');
-  if (enrichStatus) {
-    const enrichBtn = document.getElementById('mal-enrich-btn');
-    if (enrichStatus.enrichState?.running && !enrichBtn.disabled) {
-      malAttachEnrichPolling();
-    }
-    document.getElementById('mal-lag-enriched-count').textContent =
-      enrichStatus.total > 0 ? `${enrichStatus.enriched.toLocaleString()} / ${enrichStatus.total.toLocaleString()} enriched` : '';
-  }
-
-  if (!stats || stats.overall.n === 0) {
-    if (enrichStatus?.total > 0) panel.style.display = 'block';
-    return;
-  }
-  panel.style.display = 'block';
-
-  document.getElementById('mal-lag-median').textContent = malFmtLag(stats.overall.median_s);
-  document.getElementById('mal-lag-mean').textContent   = malFmtLag(stats.overall.mean_s);
-  document.getElementById('mal-lag-p90').textContent    = malFmtLag(stats.overall.p90_s);
-  document.getElementById('mal-lag-n').textContent      = stats.overall.n.toLocaleString();
-
-  const BUCKET_ORDER = ['<1h','1-6h','6-24h','1-7d','7-30d','30-90d','>90d'];
-  const bucketMap = Object.fromEntries(stats.histogram.map(b => [b.bucket, b]));
-  const maxN = Math.max(1, ...BUCKET_ORDER.map(b => bucketMap[b]?.n || 0));
-  document.getElementById('mal-lag-histogram').innerHTML = BUCKET_ORDER.map(b => {
-    const entry = bucketMap[b] || { n: 0, bySource: {} };
-    const h = entry.n > 0 ? Math.max(4, Math.round(entry.n / maxN * 56)) : 0;
-    if (h === 0) return `<div class="mal-lag-bar" style="height:0px"></div>`;
-    if (_malLagSource) {
-      // Solid bar for filtered source
-      const color = SOURCE_COLORS[_malLagSource] || 'var(--accent)';
-      return `<div class="mal-lag-bar" style="height:${h}px; background:${escHtml(color)};" title="${escHtml(b)}: ${entry.n.toLocaleString()}"></div>`;
-    }
-    // Stacked bar — segments from bottom (fastest) to top, ordered by source
-    const sources = Object.entries(entry.bySource).sort((a, b) => b[1] - a[1]);
-    const segs = sources.map(([src, n]) => {
-      const segH = Math.max(1, Math.round(n / entry.n * h));
-      const color = SOURCE_COLORS[src] || '#cbd5e1';
-      return `<div class="mal-lag-seg" style="height:${segH}px; background:${escHtml(color)}; width:100%;" title="${escHtml(src)}: ${n.toLocaleString()}"></div>`;
-    }).join('');
-    const tip = sources.map(([src, n]) => `${src}: ${n.toLocaleString()}`).join(', ');
-    return `<div class="mal-lag-bar" style="height:${h}px; display:flex; flex-direction:column-reverse; overflow:hidden; padding:0; background:transparent;" title="${escHtml(b)} — ${escHtml(tip)}">${segs}</div>`;
-  }).join('');
-  document.getElementById('mal-lag-labels').innerHTML = BUCKET_ORDER.map(b => `<span>${escHtml(b)}</span>`).join('');
-
-  if (stats.byEco?.length > 1 && !params.get('eco')) {
-    document.getElementById('mal-lag-eco-breakdown').innerHTML = stats.byEco
-      .map(e => `<span style="margin-right:1rem"><strong>${escHtml(e.ecosystem)}</strong>: median ${malFmtLag(e.mean_s)} · n=${e.n.toLocaleString()}</span>`)
-      .join('');
-  } else {
-    document.getElementById('mal-lag-eco-breakdown').innerHTML = '';
-  }
-}
-
-function malAttachEnrichPolling() {
-  const btn = document.getElementById('mal-enrich-btn');
-  const progressWrap = document.getElementById('mal-enrich-progress');
-  btn.disabled = true;
-  progressWrap.style.display = 'flex';
-  (async () => {
-    while (true) {
-      const s = await fetch('/api/cgr-malware/enrich/status').then(r => r.json());
-      const es = s.enrichState;
-      const pct = es.total ? Math.min(100, Math.round(es.done / es.total * 100)) : 0;
-      document.getElementById('mal-enrich-fill').style.width = `${pct}%`;
-      const elapsedS = es.startedAt ? Math.max(1, (Date.now() - new Date(es.startedAt).getTime()) / 1000) : 1;
-      const rate = es.done > 0 ? es.done / elapsedS : 0;
-      let countText = es.total ? `${es.done.toLocaleString()} / ${es.total.toLocaleString()}` : es.done.toLocaleString();
-      if (rate > 1 && es.total > es.done) {
-        const etaS = (es.total - es.done) / rate;
-        if (etaS > 5) countText += `  ·  ${fmtEta(etaS)} left`;
-      }
-      document.getElementById('mal-enrich-count').textContent = countText;
-      document.getElementById('mal-lag-enriched-count').textContent =
-        s.total > 0 ? `${s.enriched.toLocaleString()} / ${s.total.toLocaleString()} enriched` : '';
-      if (!es.running) break;
-      await new Promise(r => setTimeout(r, 800));
-    }
-    btn.disabled = false;
-    setTimeout(() => { progressWrap.style.display = 'none'; }, 800);
-    await malLoadStats();
-    malRunSearch();
-  })();
-}
-
-async function malRunEnrich() {
-  const btn = document.getElementById('mal-enrich-btn');
-  btn.disabled = true;
-  document.getElementById('mal-enrich-text').textContent = 'Fetching publish dates…';
-  document.getElementById('mal-enrich-fill').style.width = '0%';
-  document.getElementById('mal-enrich-count').textContent = '';
-  try {
-    const res = await fetch('/api/cgr-malware/enrich', { method: 'POST' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  } catch (err) {
-    btn.disabled = false;
-    document.getElementById('mal-banners').innerHTML =
-      `<div class="banner error">Enrichment failed: ${escHtml(err.message)}</div>`;
-    return;
-  }
-  malAttachEnrichPolling();
-}
-
-document.getElementById('mal-enrich-btn').addEventListener('click', malRunEnrich);
 
 function malDispatchFilters(immediate = false) {
   malScheduleSearch(immediate);
   malLoadChart();
   malLoadReasons();
-  malLoadStats();
 }
 
 async function malRunSearch() {
@@ -3649,26 +3574,6 @@ document.getElementById('mal-clear-btn').addEventListener('click', () => {
 ['mal-q', 'mal-version'].forEach(id => document.getElementById(id).addEventListener('input', () => malDispatchFilters()));
 ['mal-eco', 'mal-reason', 'mal-source', 'mal-since', 'mal-until', 'mal-exact'].forEach(id => document.getElementById(id).addEventListener('change', () => malDispatchFilters(true)));
 
-let _malStatsTimer = null;
-document.getElementById('mal-lag-window').addEventListener('input', function() {
-  const days = parseInt(this.value, 10);
-  document.getElementById('mal-lag-window-label').textContent = days >= 730 ? 'All time' : days === 1 ? 'Last 1d' : `Last ${days}d`;
-  clearTimeout(_malStatsTimer);
-  _malStatsTimer = setTimeout(malLoadStats, 300);
-});
-
-document.getElementById('mal-lag-source-chips').addEventListener('click', function(e) {
-  const chip = e.target.closest('.mal-source-chip');
-  if (!chip) return;
-  _malLagSource = chip.dataset.source;
-  for (const c of this.querySelectorAll('.mal-source-chip')) {
-    const color = c.dataset.color || '#475569';
-    c.classList.toggle('active', c === chip);
-    c.style.background = c === chip ? color : '';
-    c.style.borderColor = c === chip ? color : '';
-  }
-  malLoadStats();
-});
 document.getElementById('mal-prev-btn').addEventListener('click', () => { if (malState.page > 0) { malState.page--; malRunSearch(); } });
 document.getElementById('mal-next-btn').addEventListener('click', () => { malState.page++; malRunSearch(); });
 
@@ -3677,12 +3582,6 @@ document.getElementById('mal-next-btn').addEventListener('click', () => { malSta
   if (s.total > 0) {
     await malLoadReasons();
     malDispatchFilters(true);
-  }
-  // If enrichment is already running server-side, attach polling.
-  if (s.enrich?.state?.running) {
-    document.getElementById('mal-lag-panel').style.display = 'block';
-    document.getElementById('mal-enrich-text').textContent = 'Fetching publish dates…';
-    malAttachEnrichPolling();
   }
   // If a sync is already running server-side (started by another tab or before
   // a reload), attach polling without kicking off a new sync.
@@ -3706,6 +3605,309 @@ document.getElementById('mal-next-btn').addEventListener('click', () => { malSta
     malRunSync({ full: s.total === 0 });
   }
 })();
+
+// ── Detection Lag tab ─────────────────────────────────────────────────────────
+
+const BUCKET_BOUNDS = {
+  '<1h':    [0,       3600],
+  '1-6h':   [3600,    21600],
+  '6-24h':  [21600,   86400],
+  '1-7d':   [86400,   604800],
+  '7-30d':  [604800,  2592000],
+  '30-90d': [2592000, 7776000],
+  '>90d':   [7776000, null],
+};
+const BUCKET_ORDER_LAG = ['<1h','1-6h','6-24h','1-7d','7-30d','30-90d','>90d'];
+
+let _lagSource = '';
+let _lagActiveBucket = null;
+let _lagStatsAbort = null;
+let _lagStatsTimer = null;
+const lagDDState = { page: 0, pageSize: 100, minS: null, maxS: null, total: 0 };
+
+function lagBuildStatsParams() {
+  const p = new URLSearchParams();
+  const eco = document.getElementById('lag-eco').value;
+  const since = document.getElementById('lag-since').value;
+  const until = document.getElementById('lag-until').value;
+  const days = parseInt(document.getElementById('lag-window').value, 10);
+  if (eco)   p.set('eco', eco);
+  if (_lagSource) p.set('source', _lagSource);
+  if (since) p.set('since', `${since}T00:00:00Z`);
+  if (until) { const d = new Date(until + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+1); p.set('until', d.toISOString().slice(0,19)+'Z'); }
+  if (days < 730) p.set('pub_since', new Date(Date.now() - days * 86400000).toISOString().slice(0,10) + 'T00:00:00Z');
+  return p;
+}
+
+function lagRenderHistogram(histogram, activeBucket) {
+  const svg = document.getElementById('lag-chart-svg');
+  const width = svg.clientWidth || svg.parentElement?.clientWidth || 900;
+  const CHART_H = 220, COUNT_H = 22, AXIS_H = 30, TOTAL_H = CHART_H + COUNT_H + AXIS_H;
+  const nBuckets = BUCKET_ORDER_LAG.length;
+  const barW = Math.min(110, Math.floor((width - 80) / nBuckets) - 10);
+  const stride = barW + Math.floor((width - 80 - barW * nBuckets) / (nBuckets - 1));
+  const startX = Math.floor((width - stride * nBuckets + (stride - barW)) / 2);
+
+  const bucketMap = Object.fromEntries(histogram.map(b => [b.bucket, b]));
+  const maxN = Math.max(1, ...BUCKET_ORDER_LAG.map(b => bucketMap[b]?.n || 0));
+
+  const baseline = `<line x1="0" y1="${COUNT_H+CHART_H}" x2="${width}" y2="${COUNT_H+CHART_H}" stroke="#e2e8f0" stroke-width="1"/>`;
+
+  const bars = BUCKET_ORDER_LAG.map((bucket, i) => {
+    const entry = bucketMap[bucket] || { n: 0, bySource: {} };
+    const barH = entry.n > 0 ? Math.max(4, Math.round(entry.n / maxN * CHART_H)) : 0;
+    const x = startX + i * stride;
+    const isActive = bucket === activeBucket;
+    const baseY = COUNT_H + CHART_H;
+
+    if (barH === 0) {
+      return `<text x="${x+barW/2}" y="${baseY+20}" text-anchor="middle" class="lag-chart-axis">${escHtml(bucket)}</text>`;
+    }
+
+    // stacked segments (bottom of bar = baseY, grow upward)
+    const sources = Object.entries(entry.bySource).sort((a,b) => b[1]-a[1]);
+    let yTop = baseY - barH;
+    const segs = sources.map(([src, n]) => {
+      const segH = Math.max(1, Math.round(n / entry.n * barH));
+      const color = SOURCE_COLORS[src] || '#cbd5e1';
+      const seg = `<rect x="${x}" y="${yTop}" width="${barW}" height="${segH}" fill="${escHtml(color)}" opacity="${isActive ? '1' : '0.82'}"><title>${escHtml(src)}: ${n.toLocaleString()}</title></rect>`;
+      yTop += segH;
+      return seg;
+    }).join('');
+
+    const highlight = isActive
+      ? `<rect x="${x-2}" y="${COUNT_H+CHART_H-barH-2}" width="${barW+4}" height="${barH+4}" fill="none" stroke="#1e293b" stroke-width="2" rx="3"/>`
+      : '';
+    const countY = COUNT_H + CHART_H - barH - 5;
+    const countLabel = `<text x="${x+barW/2}" y="${countY}" text-anchor="middle" class="lag-chart-count">${entry.n.toLocaleString()}</text>`;
+    const axisLabel = `<text x="${x+barW/2}" y="${baseY+20}" text-anchor="middle" class="lag-chart-axis">${escHtml(bucket)}</text>`;
+    const clickTarget = `<rect class="lag-chart-bar" x="${x}" y="${COUNT_H}" width="${barW}" height="${CHART_H+AXIS_H}" fill="transparent" data-bucket="${escHtml(bucket)}"/>`;
+    return segs + highlight + countLabel + axisLabel + clickTarget;
+  }).join('');
+
+  svg.setAttribute('viewBox', `0 0 ${width} ${TOTAL_H}`);
+  svg.setAttribute('height', TOTAL_H);
+  svg.innerHTML = baseline + bars;
+
+  for (const el of svg.querySelectorAll('.lag-chart-bar')) {
+    el.addEventListener('click', () => {
+      const b = el.dataset.bucket;
+      if (b === _lagActiveBucket) {
+        _lagActiveBucket = null;
+        document.getElementById('lag-drilldown').style.display = 'none';
+      } else {
+        _lagActiveBucket = b;
+        const [minS, maxS] = BUCKET_BOUNDS[b];
+        lagDDState.page = 0; lagDDState.minS = minS; lagDDState.maxS = maxS;
+        lagLoadDrillDown();
+      }
+      lagRenderHistogram(histogram, _lagActiveBucket);
+    });
+  }
+
+  // legend
+  const activeSources = [...new Set(histogram.flatMap(b => Object.keys(b.bySource || {})))];
+  document.getElementById('lag-legend').innerHTML = activeSources
+    .map(src => `<div class="lag-legend-item"><div class="lag-legend-dot" style="background:${escHtml(SOURCE_COLORS[src]||'#cbd5e1')}"></div>${escHtml(src)}</div>`)
+    .join('');
+}
+
+let _lagLastHistogram = [];
+
+async function lagLoadStats() {
+  if (_lagStatsAbort) _lagStatsAbort.abort();
+  _lagStatsAbort = new AbortController();
+  const { signal } = _lagStatsAbort;
+
+  const [statsRes, enrichRes] = await Promise.allSettled([
+    fetch(`/api/cgr-malware/stats?${lagBuildStatsParams()}`, { signal }).then(r => r.json()),
+    fetch('/api/cgr-malware/enrich/status', { signal }).then(r => r.json()),
+  ]);
+  if (signal.aborted) return;
+
+  const stats = statsRes.status === 'fulfilled' ? statsRes.value : null;
+  const enrich = enrichRes.status === 'fulfilled' ? enrichRes.value : null;
+
+  if (enrich) {
+    document.getElementById('lag-enriched-count').textContent =
+      enrich.total > 0 ? `${enrich.enriched.toLocaleString()} / ${enrich.total.toLocaleString()} entries enriched · ${enrich.unavailable.toLocaleString()} unavailable` : 'No enriched entries yet';
+    if (enrich.enrichState?.running) lagAttachEnrichPolling();
+  }
+
+  if (!stats || stats.overall.n === 0) {
+    ['lsc-n','lsc-median','lsc-mean','lsc-p90','lsc-p99','lsc-1h','lsc-24h','lsc-7d','lsc-30d'].forEach(id => {
+      document.getElementById(id).textContent = '—';
+    });
+    document.getElementById('lag-chart-svg').innerHTML = '';
+    return;
+  }
+
+  const o = stats.overall;
+  document.getElementById('lsc-n').textContent      = o.n.toLocaleString();
+  document.getElementById('lsc-median').textContent = malFmtLag(o.median_s);
+  document.getElementById('lsc-mean').textContent   = malFmtLag(o.mean_s);
+  document.getElementById('lsc-p90').textContent    = malFmtLag(o.p90_s);
+  document.getElementById('lsc-p99').textContent    = malFmtLag(o.p99_s);
+  document.getElementById('lsc-1h').textContent     = o.pct_1h  != null ? `${o.pct_1h}%`  : '—';
+  document.getElementById('lsc-24h').textContent    = o.pct_24h != null ? `${o.pct_24h}%` : '—';
+  document.getElementById('lsc-7d').textContent     = o.pct_7d  != null ? `${o.pct_7d}%`  : '—';
+  document.getElementById('lsc-30d').textContent    = o.pct_30d != null ? `${o.pct_30d}%` : '—';
+
+  _lagLastHistogram = stats.histogram;
+  lagRenderHistogram(stats.histogram, _lagActiveBucket);
+}
+
+async function lagLoadDrillDown() {
+  const { minS, maxS, page, pageSize } = lagDDState;
+  const p = lagBuildStatsParams();
+  if (minS != null) p.set('lag_min_s', minS);
+  if (maxS != null) p.set('lag_max_s', maxS);
+  p.set('limit', pageSize);
+  p.set('offset', page * pageSize);
+
+  const res = await fetch(`/api/cgr-malware/search?${p}`).then(r => r.json());
+  lagDDState.total = res.total;
+
+  const title = BUCKET_ORDER_LAG.find(b => {
+    const [lo, hi] = BUCKET_BOUNDS[b];
+    return lo === minS && hi === maxS;
+  }) || 'selected range';
+  document.getElementById('lag-drilldown-title').textContent = `Packages detected in ${title}`;
+  document.getElementById('lag-drilldown-count').textContent = `${res.total.toLocaleString()} entries`;
+
+  const start = res.offset + 1, end = Math.min(res.offset + res.rows.length, res.total);
+  document.getElementById('lag-dd-page-info').textContent = res.total === 0 ? '—' : `${start.toLocaleString()}–${end.toLocaleString()}`;
+  document.getElementById('lag-dd-prev').disabled = page === 0;
+  document.getElementById('lag-dd-next').disabled = end >= res.total;
+
+  const pkgLink = (name, eco) => {
+    if (eco === 'PyPI') return `https://pypi.org/project/${encodeURIComponent(name)}/`;
+    if (eco === 'Maven') { const [g,a] = name.split('/'); return `https://search.maven.org/artifact/${encodeURIComponent(g||name)}/${encodeURIComponent(a||'')}`; }
+    return `https://www.npmjs.com/package/${encodeURIComponent(name)}`;
+  };
+
+  const tbody = res.rows.map(r => {
+    const lag = malCalcLag(r.published_at, r.blocked_at);
+    const srcColor = SOURCE_COLORS[r.source] || '#94a3b8';
+    return `<tr>
+      <td><a href="${escHtml(pkgLink(r.package_name,r.ecosystem))}" target="_blank" rel="noopener" style="font-family:monospace;font-size:0.8rem;">${escHtml(r.package_name)}</a></td>
+      <td style="font-size:0.8rem;">${escHtml(r.version||'—')}</td>
+      <td style="font-size:0.75rem;"><span style="color:${escHtml(srcColor)};font-weight:600;">●</span> ${escHtml(r.ecosystem)}</td>
+      <td style="font-size:0.78rem;white-space:nowrap;" title="${r.source||''}">${escHtml(r.source||'—')}</td>
+      <td style="font-size:0.78rem;white-space:nowrap;" title="${r.published_at||''}">${r.published_at ? escHtml(malFmtDate(r.published_at)) : '—'}</td>
+      <td style="font-size:0.78rem;white-space:nowrap;" title="${r.blocked_at}">${escHtml(malFmtDate(r.blocked_at))}</td>
+      <td style="font-size:0.78rem;font-weight:600;white-space:nowrap;">${lag!=null ? escHtml(malFmtLag(lag)) : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('lag-drilldown-results').innerHTML = `<table style="width:100%;">
+    <thead><tr><th>Package</th><th>Version</th><th>Ecosystem</th><th>Source</th><th>Published</th><th>Blocked at</th><th>Lag</th></tr></thead>
+    <tbody>${tbody}</tbody>
+  </table>`;
+  document.getElementById('lag-drilldown').style.display = 'block';
+}
+
+function lagAttachEnrichPolling() {
+  const btn = document.getElementById('lag-enrich-btn');
+  const progressWrap = document.getElementById('lag-enrich-progress');
+  if (btn.disabled) return;
+  btn.disabled = true;
+  progressWrap.style.display = 'flex';
+  (async () => {
+    while (true) {
+      const s = await fetch('/api/cgr-malware/enrich/status').then(r => r.json());
+      const es = s.enrichState;
+      const pct = es.total ? Math.min(100, Math.round(es.done / es.total * 100)) : 0;
+      document.getElementById('lag-enrich-fill').style.width = `${pct}%`;
+      const elapsedS = es.startedAt ? Math.max(1,(Date.now()-new Date(es.startedAt).getTime())/1000) : 1;
+      const rate = es.done > 0 ? es.done/elapsedS : 0;
+      let txt = es.total ? `${es.done.toLocaleString()} / ${es.total.toLocaleString()}` : es.done.toLocaleString();
+      if (rate > 1 && es.total > es.done) { const etaS=(es.total-es.done)/rate; if(etaS>5) txt += `  ·  ${fmtEta(etaS)} left`; }
+      document.getElementById('lag-enrich-count').textContent = txt;
+      document.getElementById('lag-enriched-count').textContent =
+        s.total > 0 ? `${s.enriched.toLocaleString()} / ${s.total.toLocaleString()} entries enriched · ${s.unavailable.toLocaleString()} unavailable` : '';
+      if (!es.running) break;
+      await new Promise(r => setTimeout(r, 800));
+    }
+    btn.disabled = false;
+    setTimeout(() => { progressWrap.style.display = 'none'; }, 800);
+    lagLoadStats();
+  })();
+}
+
+document.getElementById('lag-enrich-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('lag-enrich-btn');
+  btn.disabled = true;
+  document.getElementById('lag-enrich-text').textContent = 'Fetching publish dates…';
+  document.getElementById('lag-enrich-fill').style.width = '0%';
+  document.getElementById('lag-enrich-count').textContent = '';
+  try {
+    const res = await fetch('/api/cgr-malware/enrich', { method: 'POST' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    lagAttachEnrichPolling();
+  } catch (err) {
+    btn.disabled = false;
+    document.getElementById('lag-banners').innerHTML = `<div class="banner error">Enrichment failed: ${escHtml(err.message)}</div>`;
+  }
+});
+
+document.getElementById('lag-drilldown-close').addEventListener('click', () => {
+  _lagActiveBucket = null;
+  document.getElementById('lag-drilldown').style.display = 'none';
+  lagRenderHistogram(_lagLastHistogram, null);
+});
+document.getElementById('lag-dd-prev').addEventListener('click', () => { if (lagDDState.page > 0) { lagDDState.page--; lagLoadDrillDown(); } });
+document.getElementById('lag-dd-next').addEventListener('click', () => { lagDDState.page++; lagLoadDrillDown(); });
+
+function lagScheduleStats(immediate = false) {
+  clearTimeout(_lagStatsTimer);
+  _lagStatsTimer = setTimeout(lagLoadStats, immediate ? 0 : 300);
+}
+
+document.getElementById('lag-source-chips').addEventListener('click', function(e) {
+  const chip = e.target.closest('.mal-source-chip');
+  if (!chip) return;
+  _lagSource = chip.dataset.source;
+  for (const c of this.querySelectorAll('.mal-source-chip')) {
+    const color = c.dataset.color || '#475569';
+    c.classList.toggle('active', c === chip);
+    c.style.background = c === chip ? color : '';
+    c.style.borderColor = c === chip ? color : '';
+  }
+  lagLoadStats();
+});
+
+document.getElementById('lag-window').addEventListener('input', function() {
+  const days = parseInt(this.value, 10);
+  document.getElementById('lag-window-label').textContent = days >= 730 ? 'All time' : `Last ${days}d`;
+  clearTimeout(_lagStatsTimer);
+  _lagStatsTimer = setTimeout(lagLoadStats, 300);
+});
+
+['lag-eco','lag-since','lag-until'].forEach(id =>
+  document.getElementById(id).addEventListener('change', () => lagScheduleStats(true))
+);
+document.getElementById('lag-clear-btn').addEventListener('click', () => {
+  document.getElementById('lag-eco').value = '';
+  document.getElementById('lag-since').value = '';
+  document.getElementById('lag-until').value = '';
+  document.getElementById('lag-window').value = '14';
+  document.getElementById('lag-window-label').textContent = 'Last 14d';
+  _lagSource = '';
+  for (const c of document.getElementById('lag-source-chips').querySelectorAll('.mal-source-chip')) {
+    c.classList.toggle('active', !c.dataset.source);
+    c.style.background = !c.dataset.source ? '#475569' : '';
+    c.style.borderColor = !c.dataset.source ? '#475569' : '';
+  }
+  _lagActiveBucket = null;
+  document.getElementById('lag-drilldown').style.display = 'none';
+  lagScheduleStats(true);
+});
+
+// Load on tab switch
+document.querySelector('[data-tab="lag"]').addEventListener('click', () => {
+  if (!document.getElementById('lag-chart-svg').innerHTML) lagLoadStats();
+});
 </script>
 </body>
 </html>

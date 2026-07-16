@@ -668,20 +668,26 @@ Bun.serve({
         `SELECT COUNT(*) AS n, AVG(${lagExpr}) AS mean_s, MIN(${lagExpr}) AS min_s, MAX(${lagExpr}) AS max_s FROM malware ${whereSql}`
       ).get(...args);
 
-      const medianRow = overall.n > 0 ? db.prepare(`
+      const percentileRows = overall.n > 0 ? db.prepare(`
         WITH ranked AS (
           SELECT ${lagExpr} AS lag_s, ROW_NUMBER() OVER (ORDER BY ${lagExpr}) AS rn, COUNT(*) OVER () AS total
           FROM malware ${whereSql}
         )
-        SELECT AVG(lag_s) AS median_s FROM ranked WHERE rn IN ((total+1)/2, (total+2)/2)
+        SELECT
+          AVG(CASE WHEN rn IN ((total+1)/2, (total+2)/2) THEN lag_s END) AS median_s,
+          MAX(CASE WHEN rn = CAST(CEIL(total * 0.9) AS INTEGER) THEN lag_s END) AS p90_s,
+          MAX(CASE WHEN rn = CAST(CEIL(total * 0.99) AS INTEGER) THEN lag_s END) AS p99_s
+        FROM ranked
       `).get(...args) : null;
 
-      const p90Row = overall.n > 0 ? db.prepare(`
-        WITH ranked AS (
-          SELECT ${lagExpr} AS lag_s, ROW_NUMBER() OVER (ORDER BY ${lagExpr}) AS rn, COUNT(*) OVER () AS total
-          FROM malware ${whereSql}
-        )
-        SELECT lag_s AS p90_s FROM ranked WHERE rn = CAST(CEIL(total * 0.9) AS INTEGER) LIMIT 1
+      // % detected within thresholds
+      const thresholds = overall.n > 0 ? db.prepare(`
+        SELECT
+          ROUND(100.0 * SUM(CASE WHEN ${lagExpr} < 3600    THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_1h,
+          ROUND(100.0 * SUM(CASE WHEN ${lagExpr} < 86400   THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_24h,
+          ROUND(100.0 * SUM(CASE WHEN ${lagExpr} < 604800  THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_7d,
+          ROUND(100.0 * SUM(CASE WHEN ${lagExpr} < 2592000 THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_30d
+        FROM malware ${whereSql}
       `).get(...args) : null;
 
       const byEco = db.prepare(
@@ -716,7 +722,13 @@ Bun.serve({
         .filter(b => b.n > 0);
 
       return new Response(JSON.stringify({
-        overall: { ...overall, median_s: medianRow?.median_s ?? null, p90_s: p90Row?.p90_s ?? null },
+        overall: {
+          ...overall,
+          median_s: percentileRows?.median_s ?? null,
+          p90_s:    percentileRows?.p90_s    ?? null,
+          p99_s:    percentileRows?.p99_s    ?? null,
+          ...thresholds,
+        },
         byEco,
         histogram,
       }), { headers: { 'Content-Type': 'application/json' } });
@@ -743,13 +755,22 @@ Bun.serve({
       if (src)   { where.push('source = ?');          args.push(src); }
       if (since) { where.push('blocked_at >= ?');     args.push(since); }
       if (until) { where.push('blocked_at <  ?');     args.push(until); }
+      if (lag_min_s || lag_max_s) {
+        where.push(`published_at IS NOT NULL AND published_at NOT IN ('NOT_FOUND','ERROR')`);
+        const lagCol = `(julianday(blocked_at)-julianday(published_at))*86400.0`;
+        if (lag_min_s) { where.push(`${lagCol} >= ?`); args.push(parseFloat(lag_min_s)); }
+        if (lag_max_s) { where.push(`${lagCol} <  ?`); args.push(parseFloat(lag_max_s)); }
+      }
       const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
       const total = db.prepare(`SELECT COUNT(*) AS n FROM malware ${whereSql}`).get(...args).n;
+      const lagOrder = (lag_min_s || lag_max_s)
+        ? `(julianday(blocked_at)-julianday(published_at))*86400.0 ASC`
+        : `blocked_at DESC`;
       const rows  = db.prepare(`
         SELECT package_name, version, scope, malid, source, blocked_at, ecosystem, reason_json, description, published_at
         FROM malware ${whereSql}
-        ORDER BY blocked_at DESC
+        ORDER BY ${lagOrder}
         LIMIT ? OFFSET ?
       `).all(...args, limit, offset);
       const SENTINELS = new Set(['NOT_FOUND', 'ERROR']);
