@@ -101,9 +101,8 @@
   }
   .mal-chart-tick { stroke: #e2e8f0; stroke-width: 1; }
   .mal-lag-slider { accent-color: var(--accent); width: 160px; cursor: pointer; vertical-align: middle; }
-  .tip { position:relative; cursor:default; }
-  .tip::after { content:attr(data-tip); position:absolute; bottom:calc(100% + 5px); left:50%; transform:translateX(-50%); background:#1e293b; color:#fff; font-size:0.72rem; line-height:1.4; padding:5px 8px; border-radius:5px; white-space:pre-wrap; max-width:280px; word-break:break-word; pointer-events:none; opacity:0; transition:opacity 0.08s; z-index:200; }
-  .tip:hover::after { opacity:1; }
+  .tip { cursor:default; }
+  #tip-box { position:fixed; background:#1e293b; color:#fff; font-size:0.72rem; line-height:1.5; padding:6px 10px; border-radius:5px; white-space:normal; width:260px; word-break:break-word; pointer-events:none; z-index:9999; display:none; }
 
   /* Time to Detection tab */
   .lag-stat-grid { display:flex; gap:0; flex-wrap:wrap; margin-bottom:1rem; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; }
@@ -4035,7 +4034,7 @@ async function lagLoadTable() {
         <td style="font-size:0.8rem;">${escHtml(r.version||'—')}</td>
         <td style="font-size:0.78rem;">${escHtml(r.ecosystem)}</td>
         <td style="font-size:0.78rem;">
-          <span style="color:${escHtml(srcColor)};font-weight:600;">●</span> ${escHtml(r.source||'—')}${r.reason?.length ? ` <span class="tip" data-tip="${escHtml(r.reason.join('\n'))}" style="color:#94a3b8;font-size:0.72rem;">ⓘ</span>` : ''}
+          <span style="color:${escHtml(srcColor)};font-weight:600;">●</span> ${escHtml(r.source||'—')}${r.reason?.length ? ` <span class="tip" data-tip="${escHtml(r.reason.join(', '))}" style="color:#94a3b8;font-size:0.72rem;">ⓘ</span>` : ''}
         </td>
         <td style="font-size:0.78rem;white-space:nowrap;" title="${escHtml(r.published_at||'')}">${r.published_at ? escHtml(malFmtDate(r.published_at)) : '<span style="color:#cbd5e1">—</span>'}</td>
         <td style="font-size:0.78rem;white-space:nowrap;" title="${escHtml(r.blocked_at)}">${escHtml(malFmtDate(r.blocked_at))}</td>
@@ -4061,11 +4060,34 @@ function lagScheduleStats(immediate = false) {
   lagScheduleTable(immediate);
 }
 
+// ── Tooltip ───────────────────────────────────────────────────────────────────
+{
+  const box = document.getElementById('tip-box');
+  document.addEventListener('mouseover', e => {
+    const el = e.target.closest('.tip');
+    if (!el) return;
+    box.textContent = el.dataset.tip || '';
+    box.style.display = 'block';
+  });
+  document.addEventListener('mouseout', e => {
+    if (!e.target.closest('.tip')) return;
+    box.style.display = 'none';
+  });
+  document.addEventListener('mousemove', e => {
+    if (box.style.display === 'none') return;
+    const x = e.clientX + 12, y = e.clientY + 12;
+    const vw = window.innerWidth, vh = window.innerHeight;
+    box.style.left = (x + 260 > vw ? vw - 268 : x) + 'px';
+    box.style.top  = (y + box.offsetHeight > vh ? e.clientY - box.offsetHeight - 8 : y) + 'px';
+  });
+}
+
 // Load on tab switch
 document.querySelector('[data-tab="lag"]').addEventListener('click', () => {
   if (!document.getElementById('lag-chart-svg').innerHTML) { lagLoadStats(); lagLoadTable(); }
   else if (!document.getElementById('lag-table-results').innerHTML) lagLoadTable();
 });
 </script>
+<div id="tip-box"></div>
 </body>
 </html>
