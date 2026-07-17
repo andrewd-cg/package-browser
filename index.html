@@ -903,6 +903,7 @@
       <span id="mal-sync-text">Syncing…</span>
       <div class="mal-progress"><div id="mal-sync-fill" style="width:0%"></div></div>
       <span class="mal-stat" id="mal-sync-count"></span>
+      <button type="button" class="copy-btn" id="mal-cancel-btn" style="margin-left:0.5rem;">Cancel</button>
     </div>
     <div id="mal-chart" class="mal-chart" style="display:none;">
       <svg id="mal-chart-svg" height="128"></svg>
@@ -3527,6 +3528,9 @@ async function malPollSyncUntilDone({ preSyncTotal = 0 } = {}) {
   } finally {
     refreshBtn.disabled = false;
     fullBtn.disabled = false;
+    const cancelBtn = document.getElementById('mal-cancel-btn');
+    cancelBtn.disabled = false;
+    cancelBtn.textContent = 'Cancel';
     setTimeout(() => { progressWrap.style.display = 'none'; }, 800);
   }
 }
@@ -3585,6 +3589,12 @@ async function malRunSync({ full = false } = {}) {
 document.getElementById('mal-refresh-btn').addEventListener('click', () => malRunSync());
 document.getElementById('mal-full-btn').addEventListener('click', () => {
   if (confirm('Re-fetch the full dataset since 2026-01-01? This may take a few minutes.')) malRunSync({ full: true });
+});
+document.getElementById('mal-cancel-btn').addEventListener('click', async () => {
+  const btn = document.getElementById('mal-cancel-btn');
+  btn.disabled = true;
+  btn.textContent = 'Cancelling…';
+  await fetch('/api/cgr-malware/sync/cancel', { method: 'POST' }).catch(() => {});
 });
 document.getElementById('mal-clear-btn').addEventListener('click', () => {
   document.getElementById('mal-eco').value = '';

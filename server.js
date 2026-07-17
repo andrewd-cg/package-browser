@@ -230,7 +230,7 @@ if (platformToken) {
 
 // ── Malware sync ──────────────────────────────────────────────────────────────
 
-const syncState = { running: false, fetched: 0, total: 0, error: null, startedAt: null, finishedAt: null, windowsDone: 0, windowsTotal: 0 };
+const syncState = { running: false, fetched: 0, total: 0, error: null, startedAt: null, finishedAt: null, windowsDone: 0, windowsTotal: 0, cancelled: false };
 
 function malwareStatus() {
   const counts = db.prepare(`SELECT ecosystem, COUNT(*) AS n, MAX(blocked_at) AS latest FROM malware GROUP BY ecosystem`).all();
@@ -285,9 +285,11 @@ async function runMalwareSync({ token, full = false }) {
   syncState.finishedAt = null;
   syncState.windowsDone = 0;
   syncState.windowsTotal = 0;
+  syncState.cancelled = false;
   const apiBase = 'https://console-api.enforce.dev/libraries/v1/malware/blocklist';
   try {
     for (const { apiName, dbName } of PLATFORM_ECOSYSTEMS) {
+      if (syncState.cancelled) break;
       let savedPubDates = null;
       if (full) {
         savedPubDates = db.prepare(
@@ -343,8 +345,10 @@ async function runMalwareSync({ token, full = false }) {
       syncState.windowsTotal += windows.length;
 
       for (const window of windows) {
+        if (syncState.cancelled) break;
         let pageToken = null;
         while (true) {
+          if (syncState.cancelled) break;
           const params = new URLSearchParams({ ecosystem: apiName, pageSize: '500' });
           params.set('since', window.since);
           if (window.until) params.set('until', window.until);
@@ -687,6 +691,14 @@ Bun.serve({
       runMalwareSync({ token, full }).catch(() => { /* err captured in syncState.error */ });
 
       return new Response(JSON.stringify({ started: true, status: malwareStatus() }), { status: 202, headers: { 'Content-Type': 'application/json' } });
+    }
+
+    if (url.pathname === '/api/cgr-malware/sync/cancel' && req.method === 'POST') {
+      if (!syncState.running) {
+        return new Response(JSON.stringify({ error: 'No sync running' }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+      }
+      syncState.cancelled = true;
+      return new Response(JSON.stringify({ ok: true }), { headers: { 'Content-Type': 'application/json' } });
     }
 
     // Malware enrichment (fire-and-forget).
