@@ -332,13 +332,11 @@ async function runMalwareSync({ token, full = false }) {
         );
         // Past months not yet completed = need backfill
         const backfill = allWins.filter(w => w.since < currentMonthStartISO && !completedSet.has(w.since));
-        // Current month (always re-fetch, it's still accumulating entries)
-        const currentWin = allWins.find(w => w.since === currentMonthStartISO);
-        // Incremental delta from MAX(blocked_at) to catch anything after current window start
+        // Incremental delta from MAX(blocked_at) — covers current month and any new entries
         const latest = db.prepare(`SELECT MAX(blocked_at) AS m FROM malware WHERE ecosystem = ?`).get(dbName);
         const deltaWin = { since: latest?.m || currentMonthStartISO, until: null };
 
-        windows = [...backfill, ...(currentWin ? [currentWin] : []), deltaWin];
+        windows = [...backfill, deltaWin];
         if (backfill.length) console.log(`[${dbName}] backfilling ${backfill.length} missing month(s): ${backfill.map(w => w.since.slice(0,7)).join(', ')}`);
       }
 
