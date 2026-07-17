@@ -777,15 +777,15 @@ Bun.serve({
       ).all(...args);
 
       // Histogram grouped by (bucket, source) so the UI can render stacked bars
-      const BUCKET_ORDER = ['<1h','1-6h','6-24h','1-7d','7-30d','30-90d','>90d'];
+      const BUCKET_ORDER = ['<30m','<1h','1-6h','6-24h','1-7d','7-30d','>30d'];
       const bucketExpr = `CASE
+        WHEN ${lagExpr} < 1800    THEN '<30m'
         WHEN ${lagExpr} < 3600    THEN '<1h'
         WHEN ${lagExpr} < 21600   THEN '1-6h'
         WHEN ${lagExpr} < 86400   THEN '6-24h'
         WHEN ${lagExpr} < 604800  THEN '1-7d'
         WHEN ${lagExpr} < 2592000 THEN '7-30d'
-        WHEN ${lagExpr} < 7776000 THEN '30-90d'
-        ELSE '>90d'
+        ELSE '>30d'
       END`;
       const histRaw = db.prepare(`
         SELECT ${bucketExpr} AS bucket, COALESCE(source, 'unknown') AS src, COUNT(*) AS n
