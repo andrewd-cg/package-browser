@@ -3917,7 +3917,7 @@ document.getElementById('lag-dd-next').addEventListener('click', () => { lagDDSt
 
 function lagScheduleStats(immediate = false) {
   clearTimeout(_lagStatsTimer);
-  _lagStatsTimer = setTimeout(lagLoadStats, immediate ? 0 : 300);
+  _lagStatsTimer = setTimeout(() => { lagLoadStats(); lagLoadTable(); }, immediate ? 0 : 300);
 }
 
 document.getElementById('lag-source-chips').addEventListener('click', function(e) {
@@ -4053,12 +4053,6 @@ document.getElementById('lag-table-search').addEventListener('input', () => lagS
 document.getElementById('lag-table-prev').addEventListener('click', () => { if (lagTableState.page > 0) { lagTableState.page--; lagLoadTable(); } });
 document.getElementById('lag-table-next').addEventListener('click', () => { lagTableState.page++; lagLoadTable(); });
 
-// Reload table when any TDD filter changes
-const _origLagScheduleStats = lagScheduleStats;
-function lagScheduleStats(immediate = false) {
-  _origLagScheduleStats(immediate);
-  lagScheduleTable(immediate);
-}
 
 // ── Tooltip ───────────────────────────────────────────────────────────────────
 {
