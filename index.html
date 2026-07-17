@@ -993,7 +993,7 @@
     <!-- enrichment bar -->
     <div class="lag-enrich-bar" id="lag-enrich-bar">
       <span id="lag-enriched-count" style="flex:1">—</span>
-      <button type="button" class="copy-btn" id="lag-enrich-btn">Enrich publish dates</button>
+      <button type="button" class="copy-btn" id="lag-enrich-btn">Fetch publish dates</button>
     </div>
     <div class="mal-bar" id="lag-enrich-progress" style="display:none; margin-bottom:0.75rem;">
       <span id="lag-enrich-text" style="font-size:0.82rem;color:#64748b;">Fetching publish dates…</span>
@@ -1002,7 +1002,7 @@
     </div>
     <!-- stat cards -->
     <div class="lag-stat-grid" id="lag-stat-grid">
-      <div class="lag-stat-cell"><div class="lsc-label">Enriched entries</div><div class="lsc-value" id="lsc-n">—</div></div>
+      <div class="lag-stat-cell"><div class="lsc-label">Lag calculated</div><div class="lsc-value" id="lsc-n">—</div></div>
       <div class="lag-stat-cell"><div class="lsc-label">Median</div><div class="lsc-value" id="lsc-median">—</div></div>
       <div class="lag-stat-cell"><div class="lsc-label">Mean</div><div class="lsc-value" id="lsc-mean">—</div></div>
       <div class="lag-stat-cell"><div class="lsc-label">P90</div><div class="lsc-value" id="lsc-p90">—</div></div>
@@ -3759,7 +3759,7 @@ async function lagLoadStats() {
 
   if (enrich) {
     document.getElementById('lag-enriched-count').textContent =
-      enrich.total > 0 ? `${enrich.enriched.toLocaleString()} / ${enrich.total.toLocaleString()} entries enriched · ${enrich.unavailable.toLocaleString()} unavailable` : 'No enriched entries yet';
+      enrich.total > 0 ? `${enrich.enriched.toLocaleString()} / ${enrich.total.toLocaleString()} publish dates known · ${enrich.unavailable.toLocaleString()} not found` : 'No publish dates yet — click Fetch publish dates';
     if (enrich.enrichState?.running) lagAttachEnrichPolling();
   }
 
@@ -3856,7 +3856,7 @@ function lagAttachEnrichPolling() {
       if (rate > 1 && es.total > es.done) { const etaS=(es.total-es.done)/rate; if(etaS>5) txt += `  ·  ${fmtEta(etaS)} left`; }
       document.getElementById('lag-enrich-count').textContent = txt;
       document.getElementById('lag-enriched-count').textContent =
-        s.total > 0 ? `${s.enriched.toLocaleString()} / ${s.total.toLocaleString()} entries enriched · ${s.unavailable.toLocaleString()} unavailable` : '';
+        s.total > 0 ? `${s.enriched.toLocaleString()} / ${s.total.toLocaleString()} publish dates known · ${s.unavailable.toLocaleString()} not found` : '';
       if (!es.running) break;
       await new Promise(r => setTimeout(r, 800));
     }
