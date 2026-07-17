@@ -2,9 +2,12 @@ services:
   init-data:
     image: cgr.dev/chainguard/wolfi-base:latest
     pull_policy: always
-    command: ["sh", "-c", "chown 65532:65532 /data"]
+    user: root
+    command: ["sh", "-c", "chown 65532:65532 /data && cp -rp /host-chainctl/. /chainctl-cache/ && chown -R 65532:65532 /chainctl-cache/"]
     volumes:
       - ./data:/data
+      - ~/.cache/chainguard:/host-chainctl:ro
+      - chainctl-cache:/chainctl-cache
 
   package-browser:
     image: ghcr.io/andrewd-cg/package-browser:latest
@@ -18,4 +21,7 @@ services:
       MALWARE_DB_PATH: /data/malware.db
     volumes:
       - ./data:/data
-      - ~/.cache/chainguard:/home/nonroot/.cache/chainguard:ro
+      - chainctl-cache:/home/nonroot/.cache/chainguard
+
+volumes:
+  chainctl-cache:
