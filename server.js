@@ -210,10 +210,11 @@ async function refreshPlatformTokenViaChainctl() {
 function scheduleTokenRefresh() {
   if (!platformTokenExpiry) return;
   const refreshAt = platformTokenExpiry - 5 * 60 * 1000; // 5 min before expiry
-  const delay = Math.max(0, refreshAt - Date.now());
+  const delay = refreshAt - Date.now();
+  // If we're already past the refresh point, don't spin — wait 60s before retrying
   tokenRefreshTimer = setTimeout(async () => {
     await refreshPlatformTokenViaChainctl();
-  }, delay);
+  }, Math.max(60000, delay));
 }
 
 // Seed from env var on startup; if none set, try to mint via chainctl
