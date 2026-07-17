@@ -3887,7 +3887,7 @@ function lagAttachEnrichPolling() {
     _lagEnrichPolling = false;
     btn.disabled = false;
     setTimeout(() => { progressWrap.style.display = 'none'; }, 800);
-    lagLoadStats();
+    lagScheduleStats(true);
   })();
 }
 
@@ -3930,7 +3930,7 @@ document.getElementById('lag-source-chips').addEventListener('click', function(e
     c.style.background = c === chip ? color : '';
     c.style.borderColor = c === chip ? color : '';
   }
-  lagLoadStats();
+  lagScheduleStats(true);
 });
 
 document.getElementById('lag-window-chips').addEventListener('click', function(e) {
@@ -3943,10 +3943,10 @@ document.getElementById('lag-window-chips').addEventListener('click', function(e
   }
   const isCustom = chip.dataset.days === 'custom';
   document.getElementById('lag-custom-wrap').style.display = isCustom ? 'flex' : 'none';
-  if (!isCustom) lagLoadStats();
+  if (!isCustom) lagScheduleStats(true);
 });
 document.getElementById('lag-custom-days').addEventListener('change', function() {
-  if (this.value && parseInt(this.value) > 0) lagLoadStats();
+  if (this.value && parseInt(this.value) > 0) lagScheduleStats(true);
 });
 
 document.getElementById('lag-eco-chips').addEventListener('click', function(e) {
