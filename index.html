@@ -3461,14 +3461,22 @@ function fmtEta(s) {
 function malRenderSyncProgress(sync, { estimatedTotal = 0 } = {}) {
   const progressFill  = document.getElementById('mal-sync-fill');
   const progressCount = document.getElementById('mal-sync-count');
-  const { fetched, startedAt } = sync;
+  const { fetched, startedAt, windowsDone = 0, windowsTotal = 0 } = sync;
   const elapsedS = startedAt ? Math.max(1, (Date.now() - new Date(startedAt).getTime()) / 1000) : 1;
   const rate = fetched > 0 ? fetched / elapsedS : 0;
-  const denom = Math.max(estimatedTotal, fetched);
-  const pct = denom > 0 ? Math.min(95, Math.round(fetched / denom * 100)) : 0;
+
+  // When window progress is available, derive a better total estimate from it
+  let denom = Math.max(estimatedTotal, fetched);
+  if (windowsTotal > 1 && windowsDone > 0 && fetched > denom) {
+    denom = Math.round(fetched / windowsDone * windowsTotal);
+  }
+
+  const pct = denom > fetched ? Math.min(95, Math.round(fetched / denom * 100)) : (windowsTotal > 1 ? Math.min(95, Math.round(windowsDone / windowsTotal * 100)) : 0);
   progressFill.style.width = `${pct}%`;
+
   let text = fetched.toLocaleString();
   if (denom > fetched) text += ` / ~${denom.toLocaleString()}`;
+  if (windowsTotal > 1) text += `  ·  window ${windowsDone}/${windowsTotal}`;
   if (rate > 10) text += `  ·  ${Math.round(rate).toLocaleString()}/s`;
   if (rate > 10 && denom > fetched) {
     const etaS = (denom - fetched) / rate;

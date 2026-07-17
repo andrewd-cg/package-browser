@@ -229,7 +229,7 @@ if (platformToken) {
 
 // ── Malware sync ──────────────────────────────────────────────────────────────
 
-const syncState = { running: false, fetched: 0, total: 0, error: null, startedAt: null, finishedAt: null };
+const syncState = { running: false, fetched: 0, total: 0, error: null, startedAt: null, finishedAt: null, windowsDone: 0, windowsTotal: 0 };
 
 function malwareStatus() {
   const counts = db.prepare(`SELECT ecosystem, COUNT(*) AS n, MAX(blocked_at) AS latest FROM malware GROUP BY ecosystem`).all();
@@ -282,6 +282,8 @@ async function runMalwareSync({ token, full = false }) {
   syncState.error = null;
   syncState.startedAt = new Date().toISOString();
   syncState.finishedAt = null;
+  syncState.windowsDone = 0;
+  syncState.windowsTotal = 0;
   const apiBase = 'https://console-api.enforce.dev/libraries/v1/malware/blocklist';
   try {
     for (const { apiName, dbName } of PLATFORM_ECOSYSTEMS) {
@@ -339,6 +341,8 @@ async function runMalwareSync({ token, full = false }) {
         if (backfill.length) console.log(`[${dbName}] backfilling ${backfill.length} missing month(s): ${backfill.map(w => w.since.slice(0,7)).join(', ')}`);
       }
 
+      syncState.windowsTotal += windows.length;
+
       for (const window of windows) {
         let pageToken = null;
         while (true) {
@@ -371,11 +375,11 @@ async function runMalwareSync({ token, full = false }) {
         if (window.until) {
           const windowEnd = new Date(window.until);
           const now = new Date();
-          // Only mark as complete if the window is fully in the past
           if (windowEnd <= now) {
             markWindowDone.run(dbName, window.since, window.until, new Date().toISOString());
           }
         }
+        syncState.windowsDone++;
       }
 
       if (full && savedPubDates?.length) {
