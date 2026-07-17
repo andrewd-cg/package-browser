@@ -3395,6 +3395,9 @@ async function malLoadChart() {
   }
 }
 
+const SOURCE_NAMES = { chainguard: 'Sentinel', osv: 'OSV', manual: 'Manual', 'ossf-commits': 'OSSF' };
+function srcLabel(s) { return SOURCE_NAMES[s] || s || '—'; }
+
 const SOURCE_COLORS = {
   chainguard: '#3b82f6',
   osv:        '#f59e0b',
@@ -3723,7 +3726,7 @@ function lagRenderHistogram(histogram, activeBucket) {
     const segs = sources.map(([src, n]) => {
       const segH = Math.max(1, Math.round(n / entry.n * barH));
       const color = SOURCE_COLORS[src] || '#cbd5e1';
-      const seg = `<rect x="${x}" y="${yTop}" width="${barW}" height="${segH}" fill="${escHtml(color)}" opacity="${isActive ? '1' : '0.82'}"><title>${escHtml(src)}: ${n.toLocaleString()}</title></rect>`;
+      const seg = `<rect x="${x}" y="${yTop}" width="${barW}" height="${segH}" fill="${escHtml(color)}" opacity="${isActive ? '1' : '0.82'}"><title>${escHtml(srcLabel(src))}: ${n.toLocaleString()}</title></rect>`;
       yTop += segH;
       return seg;
     }).join('');
@@ -3761,7 +3764,7 @@ function lagRenderHistogram(histogram, activeBucket) {
   // legend
   const activeSources = [...new Set(histogram.flatMap(b => Object.keys(b.bySource || {})))];
   document.getElementById('lag-legend').innerHTML = activeSources
-    .map(src => `<div class="lag-legend-item"><div class="lag-legend-dot" style="background:${escHtml(SOURCE_COLORS[src]||'#cbd5e1')}"></div>${escHtml(src)}</div>`)
+    .map(src => `<div class="lag-legend-item"><div class="lag-legend-dot" style="background:${escHtml(SOURCE_COLORS[src]||'#cbd5e1')}"></div>${escHtml(srcLabel(src))}</div>`)
     .join('');
 }
 
@@ -3847,7 +3850,7 @@ async function lagLoadDrillDown() {
       <td><a href="${escHtml(pkgLink(r.package_name,r.ecosystem))}" target="_blank" rel="noopener" style="font-family:monospace;font-size:0.8rem;">${escHtml(r.package_name)}</a></td>
       <td style="font-size:0.8rem;">${escHtml(r.version||'—')}</td>
       <td style="font-size:0.75rem;"><span style="color:${escHtml(srcColor)};font-weight:600;">●</span> ${escHtml(r.ecosystem)}</td>
-      <td style="font-size:0.78rem;white-space:nowrap;" title="${r.source||''}">${escHtml(r.source||'—')}</td>
+      <td style="font-size:0.78rem;white-space:nowrap;" title="${r.source||''}">${escHtml(srcLabel(r.source))}</td>
       <td style="font-size:0.78rem;white-space:nowrap;" title="${r.published_at||''}">${r.published_at ? escHtml(malFmtDate(r.published_at)) : '—'}</td>
       <td style="font-size:0.78rem;white-space:nowrap;" title="${r.blocked_at}">${escHtml(malFmtDate(r.blocked_at))}</td>
       <td style="font-size:0.78rem;font-weight:600;white-space:nowrap;">${lag!=null ? escHtml(malFmtLag(lag)) : '—'}</td>
@@ -4037,7 +4040,7 @@ async function lagLoadTable() {
         <td style="font-size:0.8rem;">${escHtml(r.version||'—')}</td>
         <td style="font-size:0.78rem;">${escHtml(r.ecosystem)}</td>
         <td style="font-size:0.78rem;">
-          <span style="color:${escHtml(srcColor)};font-weight:600;">●</span> ${escHtml(r.source||'—')}${r.reason?.length ? ` <span class="tip" data-tip="${escHtml(r.reason.join(', '))}" style="color:#94a3b8;font-size:0.72rem;">ⓘ</span>` : ''}
+          <span style="color:${escHtml(srcColor)};font-weight:600;">●</span> ${escHtml(srcLabel(r.source))}${r.reason?.length ? ` <span class="tip" data-tip="${escHtml(r.reason.join(', '))}" style="color:#94a3b8;font-size:0.72rem;">ⓘ</span>` : ''}
         </td>
         <td style="font-size:0.78rem;white-space:nowrap;">${r.published_at ? escHtml(malFmtDate(r.published_at)) + ` <span class="tip" data-tip="${escHtml(formatDateExact(r.published_at))}" style="color:#94a3b8;font-size:0.72rem;">ⓘ</span>` : '<span style="color:#cbd5e1">—</span>'}</td>
         <td style="font-size:0.78rem;white-space:nowrap;">${escHtml(malFmtDate(r.blocked_at))} <span class="tip" data-tip="${escHtml(formatDateExact(r.blocked_at))}" style="color:#94a3b8;font-size:0.72rem;">ⓘ</span></td>
