@@ -1008,9 +1008,10 @@
       <div class="lag-stat-cell"><div class="lsc-label">P90</div><div class="lsc-value" id="lsc-p90">—</div></div>
       <div class="lag-stat-cell"><div class="lsc-label">P99</div><div class="lsc-value" id="lsc-p99">—</div></div>
       <div class="lag-stat-cell"><div class="lsc-label">Within 1h</div><div class="lsc-value good" id="lsc-1h">—</div></div>
+      <div class="lag-stat-cell"><div class="lsc-label">Within 3h</div><div class="lsc-value good" id="lsc-3h">—</div></div>
+      <div class="lag-stat-cell"><div class="lsc-label">Within 12h</div><div class="lsc-value good" id="lsc-12h">—</div></div>
       <div class="lag-stat-cell"><div class="lsc-label">Within 24h</div><div class="lsc-value good" id="lsc-24h">—</div></div>
       <div class="lag-stat-cell"><div class="lsc-label">Within 7d</div><div class="lsc-value good" id="lsc-7d">—</div></div>
-      <div class="lag-stat-cell"><div class="lsc-label">Within 30d</div><div class="lsc-value good" id="lsc-30d">—</div></div>
     </div>
     <!-- big histogram -->
     <div class="lag-chart-wrap">
@@ -3764,7 +3765,7 @@ async function lagLoadStats() {
   }
 
   if (!stats || stats.overall.n === 0) {
-    ['lsc-n','lsc-median','lsc-mean','lsc-p90','lsc-p99','lsc-1h','lsc-24h','lsc-7d','lsc-30d'].forEach(id => {
+    ['lsc-n','lsc-median','lsc-mean','lsc-p90','lsc-p99','lsc-1h','lsc-3h','lsc-12h','lsc-24h','lsc-7d'].forEach(id => {
       document.getElementById(id).textContent = '—';
     });
     document.getElementById('lag-chart-svg').innerHTML = '';
@@ -3778,9 +3779,10 @@ async function lagLoadStats() {
   document.getElementById('lsc-p90').textContent    = malFmtLag(o.p90_s);
   document.getElementById('lsc-p99').textContent    = malFmtLag(o.p99_s);
   document.getElementById('lsc-1h').textContent     = o.pct_1h  != null ? `${o.pct_1h}%`  : '—';
+  document.getElementById('lsc-3h').textContent     = o.pct_3h  != null ? `${o.pct_3h}%`  : '—';
+  document.getElementById('lsc-12h').textContent    = o.pct_12h != null ? `${o.pct_12h}%` : '—';
   document.getElementById('lsc-24h').textContent    = o.pct_24h != null ? `${o.pct_24h}%` : '—';
   document.getElementById('lsc-7d').textContent     = o.pct_7d  != null ? `${o.pct_7d}%`  : '—';
-  document.getElementById('lsc-30d').textContent    = o.pct_30d != null ? `${o.pct_30d}%` : '—';
 
   _lagLastHistogram = stats.histogram;
   lagRenderHistogram(stats.histogram, _lagActiveBucket);

@@ -754,9 +754,10 @@ Bun.serve({
       const thresholds = overall.n > 0 ? db.prepare(`
         SELECT
           ROUND(100.0 * SUM(CASE WHEN ${lagExpr} < 3600    THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_1h,
+          ROUND(100.0 * SUM(CASE WHEN ${lagExpr} < 10800   THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_3h,
+          ROUND(100.0 * SUM(CASE WHEN ${lagExpr} < 43200   THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_12h,
           ROUND(100.0 * SUM(CASE WHEN ${lagExpr} < 86400   THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_24h,
-          ROUND(100.0 * SUM(CASE WHEN ${lagExpr} < 604800  THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_7d,
-          ROUND(100.0 * SUM(CASE WHEN ${lagExpr} < 2592000 THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_30d
+          ROUND(100.0 * SUM(CASE WHEN ${lagExpr} < 604800  THEN 1 ELSE 0 END) / COUNT(*), 1) AS pct_7d
         FROM malware ${whereSql}
       `).get(...args) : null;
 
