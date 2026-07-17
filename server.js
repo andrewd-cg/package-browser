@@ -768,7 +768,9 @@ Bun.serve({
       const src     = url.searchParams.get('source')  || '';
       const since   = url.searchParams.get('since')   || '';
       const until   = url.searchParams.get('until')   || '';
-      const exact   = url.searchParams.get('exact')   === '1';
+      const exact     = url.searchParams.get('exact')     === '1';
+      const lag_min_s = url.searchParams.get('lag_min_s') || '';
+      const lag_max_s = url.searchParams.get('lag_max_s') || '';
       const limit   = Math.min(parseInt(url.searchParams.get('limit')  || '200', 10) || 200, 1000);
       const offset  = parseInt(url.searchParams.get('offset') || '0',  10) || 0;
 
