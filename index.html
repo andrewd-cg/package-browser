@@ -1539,7 +1539,7 @@ tabBtns.forEach(btn => {
     tabBtns.forEach(b => b.classList.toggle('active', b === btn));
     document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id === `tab-${tab}`));
     document.body.dataset.activeTab = tab;
-    const TAB_LABELS = { lag: 'Time to Detection', malware: 'malware', bulk: 'bulk check' };
+    const TAB_LABELS = { lag: 'TTD', malware: 'malware', bulk: 'bulk check' };
     const HIDE_SUFFIX = new Set(['lag']);
     tabLabel.textContent = TAB_LABELS[tab] ?? tab;
     document.getElementById('tab-suffix').style.display = HIDE_SUFFIX.has(tab) ? 'none' : '';
@@ -3440,7 +3440,7 @@ async function malRunSearch() {
 
   el.innerHTML = `<div class="table-wrap"><table>
     <thead><tr>
-      <th>Package</th><th>Version</th><th>Blocked at</th><th>Published</th><th>Lag</th><th>Reasons</th>
+      <th>Package</th><th>Version</th><th>Blocked at</th><th>Published</th><th>TTD</th><th>Reasons</th>
     </tr></thead>
     <tbody>${data.rows.map(r => {
       const lag = malCalcLag(r.published_at, r.blocked_at);
@@ -3854,7 +3854,7 @@ async function lagLoadDrillDown() {
   }).join('');
 
   document.getElementById('lag-drilldown-results').innerHTML = `<table style="width:100%;">
-    <thead><tr><th>Package</th><th>Version</th><th>Ecosystem</th><th>Source</th><th>Published</th><th>Blocked at</th><th>Lag</th></tr></thead>
+    <thead><tr><th>Package</th><th>Version</th><th>Ecosystem</th><th>Source</th><th>Published</th><th>Blocked at</th><th>TTD</th></tr></thead>
     <tbody>${tbody}</tbody>
   </table>`;
   document.getElementById('lag-drilldown').style.display = 'block';
@@ -4025,7 +4025,7 @@ async function lagLoadTable() {
   }
 
   el.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Package</th><th>Version</th><th>Ecosystem</th><th>Source</th><th>Published</th><th>Blocked at</th><th>Lag</th></tr></thead>
+    <thead><tr><th>Package</th><th>Version</th><th>Ecosystem</th><th>Source</th><th>Published</th><th>Blocked at</th><th>TTD</th></tr></thead>
     <tbody>${res.rows.map(r => {
       const lag = malCalcLag(r.published_at, r.blocked_at);
       const srcColor = SOURCE_COLORS[r.source] || '#94a3b8';
