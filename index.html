@@ -3546,6 +3546,7 @@ async function malPollSyncUntilDone({ preSyncTotal = 0 } = {}) {
     await malLoadStatus();
     await malLoadReasons();
     malDispatchFilters(true);
+    lagScheduleStats(true);
   } finally {
     refreshBtn.disabled = false;
     fullBtn.disabled = false;
