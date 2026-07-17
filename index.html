@@ -1039,7 +1039,8 @@
     <!-- Package table -->
     <div style="margin-top:0.5rem;">
       <div class="mal-bar" style="margin-bottom:0.5rem;">
-        <input type="text" id="lag-table-search" placeholder="Search package name…" style="min-width:260px; flex:1;">
+        <input type="text" id="lag-table-search" placeholder="Search package name…" style="min-width:220px; flex:1;">
+        <input type="text" id="lag-table-version" placeholder="Version…" style="min-width:100px; width:120px;">
         <span style="flex:1"></span>
         <span><span class="mal-stat" id="lag-table-count">0</span> packages</span>
         <button type="button" class="copy-btn" id="lag-table-prev" disabled>← Prev</button>
@@ -3998,8 +3999,10 @@ let _lagTableTimer = null;
 
 async function lagLoadTable() {
   const p = lagBuildStatsParams();
-  const q = document.getElementById('lag-table-search').value.trim();
-  if (q) p.set('q', q);
+  const q = document.getElementById("lag-table-search").value.trim();
+  const ver = document.getElementById("lag-table-version").value.trim();
+  if (q) p.set("q", q);
+  if (ver) p.set("version", ver);
   p.set('limit', lagTableState.pageSize);
   p.set('offset', lagTableState.page * lagTableState.pageSize);
 
@@ -4050,6 +4053,7 @@ function lagScheduleTable(immediate = false) {
 }
 
 document.getElementById('lag-table-search').addEventListener('input', () => lagScheduleTable());
+document.getElementById('lag-table-version').addEventListener('input', () => lagScheduleTable());
 document.getElementById('lag-table-prev').addEventListener('click', () => { if (lagTableState.page > 0) { lagTableState.page--; lagLoadTable(); } });
 document.getElementById('lag-table-next').addEventListener('click', () => { lagTableState.page++; lagLoadTable(); });
 
