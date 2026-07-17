@@ -3624,12 +3624,6 @@ document.getElementById('mal-next-btn').addEventListener('click', () => { malSta
     malPollSyncUntilDone({ preSyncTotal: s.total });
     return;
   }
-  // Auto-sync on startup if creds available: full if empty, delta otherwise.
-  const { user } = getCreds('npm');
-  if (user && !malState.autoSyncTried) {
-    malState.autoSyncTried = true;
-    malRunSync({ full: s.total === 0 });
-  }
 })();
 
 // ── Detection Lag tab ─────────────────────────────────────────────────────────
