@@ -18,4 +18,4 @@ services:
       MALWARE_DB_PATH: /data/malware.db
     volumes:
       - ./data:/data
-      - ~/.config/chainguard:/home/nonroot/.config/chainguard:ro
+      - ~/.config/chainctl:/home/nonroot/.config/chainctl:ro
