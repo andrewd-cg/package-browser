@@ -970,10 +970,24 @@
       <input type="date" id="lag-since" style="font-size:0.82rem;">
       <span style="font-size:0.78rem;color:#64748b;">to</span>
       <input type="date" id="lag-until" style="font-size:0.82rem;">
-      <label style="font-size:0.78rem; color:#64748b; display:flex; align-items:center; gap:0.4rem; white-space:nowrap;">
-        Published: <span id="lag-window-label">Last 14d</span>
-        <input type="range" id="lag-window" class="mal-lag-slider" min="1" max="730" value="14" step="1">
-      </label>
+      <div style="display:flex; align-items:center; gap:0.35rem; flex-wrap:nowrap;">
+        <span style="font-size:0.78rem;color:#64748b;white-space:nowrap;">Published:</span>
+        <div id="lag-window-chips" style="display:flex; gap:0.25rem;">
+          <button class="mal-source-chip" data-days="7">7d</button>
+          <button class="mal-source-chip active" data-days="14" style="background:#475569;">14d</button>
+          <button class="mal-source-chip" data-days="30">30d</button>
+          <button class="mal-source-chip" data-days="90">90d</button>
+          <button class="mal-source-chip" data-days="180">180d</button>
+          <button class="mal-source-chip" data-days="365">1y</button>
+          <button class="mal-source-chip" data-days="0">All time</button>
+          <button class="mal-source-chip" data-days="custom">Custom</button>
+        </div>
+        <span id="lag-custom-wrap" style="display:none; align-items:center; gap:0.25rem; font-size:0.78rem; color:#64748b;">
+          <input type="number" id="lag-custom-days" min="1" max="3650" placeholder="days"
+            style="width:60px; font-size:0.78rem; padding:2px 5px; border:1px solid #e2e8f0; border-radius:4px;">
+          d
+        </span>
+      </div>
       <button type="button" class="copy-btn" id="lag-clear-btn">Clear</button>
     </div>
     <!-- enrichment bar -->
@@ -3641,12 +3655,16 @@ function lagBuildStatsParams() {
   const eco = document.getElementById('lag-eco').value;
   const since = document.getElementById('lag-since').value;
   const until = document.getElementById('lag-until').value;
-  const days = parseInt(document.getElementById('lag-window').value, 10);
+  const activeChip = document.querySelector('#lag-window-chips .active');
+  const chipDays = activeChip?.dataset.days;
+  const days = chipDays === 'custom'
+    ? parseInt(document.getElementById('lag-custom-days').value, 10) || 0
+    : parseInt(chipDays, 10) || 0;
   if (eco)   p.set('eco', eco);
   if (_lagSource) p.set('source', _lagSource);
   if (since) p.set('since', `${since}T00:00:00Z`);
   if (until) { const d = new Date(until + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate()+1); p.set('until', d.toISOString().slice(0,19)+'Z'); }
-  if (days < 730) p.set('pub_since', new Date(Date.now() - days * 86400000).toISOString().slice(0,10) + 'T00:00:00Z');
+  if (days > 0) p.set('pub_since', new Date(Date.now() - days * 86400000).toISOString().slice(0,10) + 'T00:00:00Z');
   return p;
 }
 
@@ -3891,11 +3909,20 @@ document.getElementById('lag-source-chips').addEventListener('click', function(e
   lagLoadStats();
 });
 
-document.getElementById('lag-window').addEventListener('input', function() {
-  const days = parseInt(this.value, 10);
-  document.getElementById('lag-window-label').textContent = days >= 730 ? 'All time' : `Last ${days}d`;
-  clearTimeout(_lagStatsTimer);
-  _lagStatsTimer = setTimeout(lagLoadStats, 300);
+document.getElementById('lag-window-chips').addEventListener('click', function(e) {
+  const chip = e.target.closest('.mal-source-chip');
+  if (!chip) return;
+  for (const c of this.querySelectorAll('.mal-source-chip')) {
+    c.classList.toggle('active', c === chip);
+    c.style.background = c === chip ? '#475569' : '';
+    c.style.borderColor = c === chip ? '#475569' : '';
+  }
+  const isCustom = chip.dataset.days === 'custom';
+  document.getElementById('lag-custom-wrap').style.display = isCustom ? 'flex' : 'none';
+  if (!isCustom) lagLoadStats();
+});
+document.getElementById('lag-custom-days').addEventListener('change', function() {
+  if (this.value && parseInt(this.value) > 0) lagLoadStats();
 });
 
 ['lag-eco','lag-since','lag-until'].forEach(id =>
@@ -3905,8 +3932,15 @@ document.getElementById('lag-clear-btn').addEventListener('click', () => {
   document.getElementById('lag-eco').value = '';
   document.getElementById('lag-since').value = '';
   document.getElementById('lag-until').value = '';
-  document.getElementById('lag-window').value = '14';
-  document.getElementById('lag-window-label').textContent = 'Last 14d';
+  // Reset window chips to 14d default
+  for (const c of document.getElementById('lag-window-chips').querySelectorAll('.mal-source-chip')) {
+    const active = c.dataset.days === '14';
+    c.classList.toggle('active', active);
+    c.style.background = active ? '#475569' : '';
+    c.style.borderColor = active ? '#475569' : '';
+  }
+  document.getElementById('lag-custom-days').value = '';
+  document.getElementById('lag-custom-wrap').style.display = 'none';
   _lagSource = '';
   for (const c of document.getElementById('lag-source-chips').querySelectorAll('.mal-source-chip')) {
     c.classList.toggle('active', !c.dataset.source);
