@@ -699,8 +699,7 @@
     <button class="tab-btn" data-tab="maven">maven</button>
     <button class="tab-btn" data-tab="pypi">pypi</button>
     <button class="tab-btn" data-tab="bulk">bulk check</button>
-    <button class="tab-btn" data-tab="malware">malware</button>
-    <button class="tab-btn" data-tab="lag">TTD</button>
+    <button class="tab-btn" data-tab="lag">Malware Detection</button>
   </nav>
   <button id="settings-btn" title="Settings" aria-label="Settings">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -892,11 +891,11 @@
   </div>
 
   <!-- malware tab -->
-  <div id="tab-malware" class="tab-pane">
+  <!-- Malware Detection tab -->
+  <div id="tab-lag" class="tab-pane">
+    <!-- sync status bar -->
     <div class="mal-bar">
-      <span><span class="mal-stat" id="mal-total">0</span> entries cached</span>
-      <span style="color:#94a3b8;">·</span>
-      <span>Last sync: <span class="mal-stat" id="mal-last-sync">never</span></span>
+      <span><span class="mal-stat" id="mal-total">0</span> entries · Last sync: <span class="mal-stat" id="mal-last-sync">never</span></span>
       <span style="flex:1"></span>
       <button type="button" class="fetch-btn" id="mal-refresh-btn" style="padding:6px 14px; font-size:0.85rem;">Update Malware DB</button>
       <button type="button" class="copy-btn" id="mal-full-btn" title="Re-download from 2026-01-01">Full re-sync</button>
@@ -907,52 +906,7 @@
       <span class="mal-stat" id="mal-sync-count"></span>
       <button type="button" class="copy-btn" id="mal-cancel-btn" style="margin-left:0.5rem;">Cancel</button>
     </div>
-    <div id="mal-chart" class="mal-chart" style="display:none;">
-      <svg id="mal-chart-svg" height="128"></svg>
-    </div>
-    <div class="mal-bar">
-      <select id="mal-eco" style="min-width:120px;">
-        <option value="">All ecosystems</option>
-        <option value="npm">npm</option>
-        <option value="PyPI">PyPI</option>
-        <option value="Maven">Maven</option>
-      </select>
-      <input type="text" id="mal-q" placeholder="Package name contains…" style="min-width:200px;">
-      <input type="text" id="mal-version" placeholder="Version contains…" style="min-width:140px;">
-      <select id="mal-source" style="min-width:160px;">
-        <option value="">All sources</option>
-        <option value="chainguard">Sentinel (chainguard)</option>
-        <option value="osv">OSV advisories</option>
-        <option value="manual">Manual</option>
-      </select>
-      <select id="mal-reason" style="min-width:200px;"><option value="">All reasons</option></select>
-      <span>From</span><input type="date" id="mal-since">
-      <span>to</span><input type="date" id="mal-until">
-      <button type="button" class="copy-btn" id="mal-clear-btn">Clear</button>
-    </div>
-    <div class="mal-bar">
-      <label class="filter-label" style="font-size:0.82rem;">
-        <input type="checkbox" id="mal-exact"> Exact match (package + version)
-      </label>
-      <span style="flex:1"></span>
-      <span><span class="mal-stat" id="mal-result-count">0</span> matches</span>
-      <span style="flex:1"></span>
-      <button type="button" class="copy-btn" id="mal-prev-btn" disabled>← Prev</button>
-      <span id="mal-page-info">—</span>
-      <button type="button" class="copy-btn" id="mal-next-btn" disabled>Next →</button>
-    </div>
     <div class="banners" id="mal-banners"></div>
-    <div id="mal-pkg-timeline" style="display:none; font-size:0.82rem; color:#475569; padding:0.4rem 0.75rem; background:#f0fdf4; border:1px solid #bbf7d0; border-radius:6px; margin-bottom:0.5rem;"></div>
-    <div class="results" id="mal-results">
-      <div class="status-placeholder">
-        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
-        Click <strong>Refresh</strong> to populate the local malware cache.
-      </div>
-    </div>
-  </div>
-
-  <!-- time to detection tab -->
-  <div id="tab-lag" class="tab-pane">
     <!-- filter bar -->
     <div class="mal-bar" style="flex-wrap:wrap; gap:0.4rem 0.75rem;">
       <div id="lag-eco-chips" style="display:flex; gap:0.25rem;">
@@ -1540,7 +1494,7 @@ tabBtns.forEach(btn => {
     tabBtns.forEach(b => b.classList.toggle('active', b === btn));
     document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id === `tab-${tab}`));
     document.body.dataset.activeTab = tab;
-    const TAB_LABELS = { lag: 'TTD', malware: 'malware', bulk: 'bulk check' };
+    const TAB_LABELS = { lag: 'Malware Detection', bulk: 'bulk check' };
     const HIDE_SUFFIX = new Set(['lag']);
     tabLabel.textContent = TAB_LABELS[tab] ?? tab;
     document.getElementById('tab-suffix').style.display = HIDE_SUFFIX.has(tab) ? 'none' : '';
@@ -3195,7 +3149,6 @@ document.getElementById('bulk-form').addEventListener('submit', async (e) => {
 
 // ── malware tab ───────────────────────────────────────────────────────────────
 
-const malState = { page: 0, pageSize: 100, total: 0, autoSyncTried: false };
 
 function malFmtDate(iso) {
   if (!iso) return '—';
@@ -3223,12 +3176,6 @@ function malCalcLag(publishedAt, blockedAt) {
   return s >= 0 ? s : null;
 }
 
-function malRenderReason(r) {
-  if (/^MAL-\d{4}-\d+$/i.test(r)) {
-    return `<span class="mal-reason mal-id"><a href="https://osv.dev/vulnerability/${escHtml(r)}" target="_blank" rel="noopener">${escHtml(r)}</a></span>`;
-  }
-  return `<span class="mal-reason">${escHtml(r)}</span>`;
-}
 
 async function malLoadStatus() {
   const res = await fetch('/api/cgr-malware/status');
@@ -3270,130 +3217,7 @@ async function malLoadStatus() {
   return s;
 }
 
-async function malLoadReasons() {
-  const eco = document.getElementById('mal-eco').value;
-  const res = await fetch(`/api/cgr-malware/reasons${eco ? `?eco=${encodeURIComponent(eco)}` : ''}`);
-  const data = await res.json();
-  const sel = document.getElementById('mal-reason');
-  const current = sel.value;
-  sel.innerHTML = '<option value="">All reasons</option>' +
-    data.map(r => {
-      const val = r.searchAs ?? r.reason;
-      return `<option value="${escHtml(val)}">${escHtml(r.reason)} (${r.n.toLocaleString()})</option>`;
-    }).join('');
-  sel.value = current;
-}
 
-function malBuildFilterParams() {
-  const eco     = document.getElementById('mal-eco').value;
-  const q       = document.getElementById('mal-q').value.trim();
-  const ver     = document.getElementById('mal-version').value.trim();
-  const reason  = document.getElementById('mal-reason').value;
-  const source  = document.getElementById('mal-source').value;
-  const sinceD  = document.getElementById('mal-since').value;
-  const untilD  = document.getElementById('mal-until').value;
-  const exact   = document.getElementById('mal-exact').checked;
-  const params = new URLSearchParams();
-  if (eco)    params.set('eco', eco);
-  if (q)      params.set('q', q);
-  if (ver)    params.set('version', ver);
-  if (reason) params.set('reason', reason);
-  if (source) params.set('source', source);
-  if (sinceD) params.set('since', `${sinceD}T00:00:00Z`);
-  if (untilD) {
-    const d = new Date(untilD + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + 1);
-    params.set('until', d.toISOString().slice(0, 19) + 'Z');
-  }
-  if (exact)  params.set('exact', '1');
-  return params;
-}
-
-async function malLoadChart() {
-  const wrap = document.getElementById('mal-chart');
-  const svg = document.getElementById('mal-chart-svg');
-  const params = malBuildFilterParams();
-  const res = await fetch(`/api/cgr-malware/histogram?${params}`);
-  const data = await res.json();
-  if (!data.length) { wrap.style.display = 'none'; return; }
-
-  // Fill in zero-count days so the timeline reads continuously.
-  const days = [];
-  const first = new Date(data[0].day + 'T00:00:00Z');
-  const last  = new Date(data[data.length - 1].day + 'T00:00:00Z');
-  const map = new Map(data.map(d => [d.day, d.n]));
-  for (let t = first.getTime(); t <= last.getTime(); t += 86400000) {
-    const iso = new Date(t).toISOString().slice(0, 10);
-    days.push({ day: iso, n: map.get(iso) || 0 });
-  }
-
-  wrap.style.display = 'block';
-  const width = svg.clientWidth || svg.parentElement?.clientWidth || 900;
-  const chartH = 100, axisH = 28, height = chartH + axisH;
-  const padY = 4;
-  const maxN = Math.max(1, ...days.map(d => d.n));
-  const barW = Math.max(2, Math.min(40, Math.floor(width / days.length) - 1));
-  const gap = barW >= 20 ? Math.max(2, Math.floor(barW * 0.3)) : 1;
-  const stride = barW + gap;
-  const startX = Math.max(0, Math.floor((width - stride * days.length) / 2));
-
-  const rects = days.map((d, i) => {
-    const h = d.n === 0 ? 0 : Math.max(1, Math.round((d.n / maxN) * (chartH - padY * 2)));
-    const x = startX + i * stride;
-    const y = chartH - padY - h;
-    const label = `${d.day} — ${d.n.toLocaleString()} finding${d.n === 1 ? '' : 's'}`;
-    return `<rect class="mal-chart-rect" x="${x}" y="${y}" width="${barW}" height="${h}" data-day="${d.day}"><title>${escHtml(label)}</title></rect>`;
-  }).join('');
-
-  // Adaptive X-axis labels by range length.
-  const MONTH = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const N = days.length;
-  let mode;          // 'daily' | 'stride' | 'month'
-  let strideDays = 1;
-  if (N <= 14)      { mode = 'daily';  strideDays = 1; }
-  else if (N <= 30) { mode = 'stride'; strideDays = 2; }
-  else if (N <= 60) { mode = 'stride'; strideDays = 7; }
-  else              { mode = 'month'; }
-
-  const labelIdx = new Set();
-  if (mode === 'month') {
-    days.forEach((d, i) => { if (d.day.endsWith('-01')) labelIdx.add(i); });
-    if (labelIdx.size === 0) { labelIdx.add(0); if (N > 1) labelIdx.add(N - 1); }
-  } else {
-    for (let i = 0; i < N; i += strideDays) labelIdx.add(i);
-    labelIdx.add(N - 1);
-  }
-  let prevYear = null;
-  const axisParts = [...labelIdx].sort((a, b) => a - b).map(i => {
-    const d = new Date(days[i].day + 'T00:00:00Z');
-    const x = startX + i * stride + barW / 2;
-    const year = d.getUTCFullYear();
-    const showYear = year !== prevYear;
-    prevYear = year;
-    let text;
-    if (mode === 'month') {
-      text = showYear ? `${MONTH[d.getUTCMonth()]} ${year}` : MONTH[d.getUTCMonth()];
-    } else {
-      text = `${MONTH[d.getUTCMonth()]} ${d.getUTCDate()}`;
-    }
-    return `<line class="mal-chart-tick" x1="${x}" y1="${chartH}" x2="${x}" y2="${chartH + 4}"/>` +
-           `<text class="mal-chart-axis" x="${x}" y="${chartH + 18}" text-anchor="middle">${escHtml(text)}</text>`;
-  }).join('');
-  const baseline = `<line class="mal-chart-tick" x1="0" y1="${chartH + 0.5}" x2="${width}" y2="${chartH + 0.5}"/>`;
-  const maxLabel = `<text class="mal-chart-axis" x="4" y="13">max: ${maxN.toLocaleString()}</text>`;
-
-  svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-  svg.setAttribute('height', height);
-  svg.innerHTML = baseline + rects + axisParts + maxLabel;
-  // Click-to-narrow: set both date inputs to the clicked day, re-dispatch.
-  for (const r of svg.querySelectorAll('.mal-chart-rect')) {
-    r.addEventListener('click', () => {
-      const day = r.getAttribute('data-day');
-      document.getElementById('mal-since').value = day;
-      document.getElementById('mal-until').value = day;
-      malDispatchFilters(true);
-    });
-  }
-}
 
 const SOURCE_NAMES = { chainguard: 'Sentinel', osv: 'OSV', manual: 'Manual', 'ossf-commits': 'OSSF' };
 function srcLabel(s) { return SOURCE_NAMES[s] || s || '—'; }
@@ -3406,87 +3230,6 @@ const SOURCE_COLORS = {
   unknown:    '#cbd5e1',
 };
 
-function malDispatchFilters(immediate = false) {
-  malScheduleSearch(immediate);
-  malLoadChart();
-  malLoadReasons();
-}
-
-async function malRunSearch() {
-  const params = malBuildFilterParams();
-  params.set('limit', malState.pageSize);
-  params.set('offset', malState.page * malState.pageSize);
-
-  const res = await fetch(`/api/cgr-malware/search?${params}`);
-  const data = await res.json();
-  malState.total = data.total;
-  document.getElementById('mal-result-count').textContent = data.total.toLocaleString();
-
-  const start = data.offset + 1;
-  const end = Math.min(data.offset + data.rows.length, data.total);
-  document.getElementById('mal-page-info').textContent = data.total === 0 ? '—' : `${start.toLocaleString()}–${end.toLocaleString()}`;
-  document.getElementById('mal-prev-btn').disabled = malState.page === 0;
-  document.getElementById('mal-next-btn').disabled = end >= data.total;
-
-  const el = document.getElementById('mal-results');
-  const timeline = document.getElementById('mal-pkg-timeline');
-  if (data.rows.length === 0) {
-    el.innerHTML = `<div class="mal-empty">No malware entries match these filters.</div>`;
-    timeline.style.display = 'none';
-    return;
-  }
-
-  const pkgLink = (name, eco) => {
-    if (eco === 'PyPI') return `https://pypi.org/project/${encodeURIComponent(name)}/`;
-    if (eco === 'Maven') { const [g, a] = name.split('/'); return `https://search.maven.org/artifact/${encodeURIComponent(g || name)}/${encodeURIComponent(a || '')}`; }
-    return `https://www.npmjs.com/package/${encodeURIComponent(name)}`;
-  };
-
-  el.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr>
-      <th>Package</th><th>Version</th><th>Blocked at</th><th>Published</th><th>TTD</th><th>Reasons</th>
-    </tr></thead>
-    <tbody>${data.rows.map(r => {
-      const lag = malCalcLag(r.published_at, r.blocked_at);
-      const pubDisplay = r.published_at ? escHtml(malFmtDate(r.published_at)) : '<span style="color:#cbd5e1">—</span>';
-      const pubTitle = r.published_at ? escHtml(formatDateExact(r.published_at)) : '';
-      const lagDisplay = lag != null ? escHtml(malFmtLag(lag)) : '<span style="color:#cbd5e1">—</span>';
-      return `<tr>
-        <td><a href="${escHtml(pkgLink(r.package_name, r.ecosystem))}" target="_blank" rel="noopener" style="font-family:'SFMono-Regular',Consolas,monospace; font-size:0.82rem;">${escHtml(r.package_name)}</a></td>
-        <td title="${escHtml(r.version || '')}"><span class="mal-version-text">${escHtml(r.version || '—')}</span></td>
-        <td style="font-size:0.8rem; white-space:nowrap;" title="${escHtml(r.blocked_at)}">${escHtml(malFmtDate(r.blocked_at))}</td>
-        <td style="font-size:0.8rem; white-space:nowrap;" title="${pubTitle}">${pubDisplay}</td>
-        <td style="font-size:0.8rem; white-space:nowrap;">${lagDisplay}</td>
-        <td>${r.reason.map(malRenderReason).join(' ')}</td>
-      </tr>`;
-    }).join('')}
-    </tbody></table></div>`;
-
-  // Package timeline: show for exact-match single-package queries with enriched rows
-  const q = document.getElementById('mal-q').value.trim();
-  const exact = document.getElementById('mal-exact').checked;
-  const enrichedRows = data.rows.filter(r => r.published_at);
-  if (q && exact && enrichedRows.length > 0) {
-    const earliest = enrichedRows.reduce((a, b) => Date.parse(a.published_at) <= Date.parse(b.published_at) ? a : b);
-    const fastest = enrichedRows.reduce((a, b) => {
-      const la = malCalcLag(a.published_at, a.blocked_at) ?? Infinity;
-      const lb = malCalcLag(b.published_at, b.blocked_at) ?? Infinity;
-      return la <= lb ? a : b;
-    });
-    const fastestLag = malCalcLag(fastest.published_at, fastest.blocked_at);
-    timeline.style.display = 'block';
-    timeline.innerHTML = `<strong>Timeline for ${escHtml(q)}:</strong> first published ${escHtml(malFmtDate(earliest.published_at))}` +
-      (fastestLag != null ? ` · fastest detection: <strong>${escHtml(malFmtLag(fastestLag))}</strong> (v${escHtml(fastest.version || 'any')} blocked ${escHtml(malFmtDate(fastest.blocked_at))})` : '');
-  } else {
-    timeline.style.display = 'none';
-  }
-}
-
-let malSearchTimer = null;
-function malScheduleSearch(immediate = false) {
-  clearTimeout(malSearchTimer);
-  malSearchTimer = setTimeout(() => { malState.page = 0; malRunSearch(); }, immediate ? 0 : 250);
-}
 
 function fmtEta(s) {
   if (s < 60)   return `~${Math.round(s)}s`;
@@ -3544,8 +3287,6 @@ async function malPollSyncUntilDone({ preSyncTotal = 0 } = {}) {
       await new Promise(r => setTimeout(r, 500));
     }
     await malLoadStatus();
-    await malLoadReasons();
-    malDispatchFilters(true);
     lagScheduleStats(true);
   } finally {
     refreshBtn.disabled = false;
@@ -3618,33 +3359,9 @@ document.getElementById('mal-cancel-btn').addEventListener('click', async () => 
   btn.textContent = 'Cancelling…';
   await fetch('/api/cgr-malware/sync/cancel', { method: 'POST' }).catch(() => {});
 });
-document.getElementById('mal-clear-btn').addEventListener('click', () => {
-  document.getElementById('mal-eco').value = '';
-  document.getElementById('mal-q').value = '';
-  document.getElementById('mal-version').value = '';
-  document.getElementById('mal-reason').value = '';
-  document.getElementById('mal-source').value = '';
-  document.getElementById('mal-since').value = '';
-  document.getElementById('mal-until').value = '';
-  document.getElementById('mal-exact').checked = false;
-  malDispatchFilters(true);
-});
-['mal-q', 'mal-version'].forEach(id => document.getElementById(id).addEventListener('input', () => malDispatchFilters()));
-['mal-eco', 'mal-reason', 'mal-source', 'mal-since', 'mal-until', 'mal-exact'].forEach(id => document.getElementById(id).addEventListener('change', () => malDispatchFilters(true)));
-
-document.getElementById('mal-prev-btn').addEventListener('click', () => { if (malState.page > 0) { malState.page--; malRunSearch(); } });
-document.getElementById('mal-next-btn').addEventListener('click', () => { malState.page++; malRunSearch(); });
-
 (async function malInit() {
   const s = await malLoadStatus();
-  if (s.total > 0) {
-    await malLoadReasons();
-    malDispatchFilters(true);
-  }
-  // If a sync is already running server-side (started by another tab or before
-  // a reload), attach polling without kicking off a new sync.
   if (s.sync?.running) {
-    malState.autoSyncTried = true;
     const progressWrap = document.getElementById('mal-sync-progress');
     const refreshBtn   = document.getElementById('mal-refresh-btn');
     const fullBtn      = document.getElementById('mal-full-btn');
@@ -3654,7 +3371,6 @@ document.getElementById('mal-next-btn').addEventListener('click', () => { malSta
     document.getElementById('mal-sync-text').textContent = 'Syncing…';
     malRenderSyncProgress(s.sync, { estimatedTotal: s.total });
     malPollSyncUntilDone({ preSyncTotal: s.total });
-    return;
   }
 })();
 
