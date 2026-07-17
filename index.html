@@ -953,12 +953,12 @@
   <div id="tab-lag" class="tab-pane">
     <!-- filter bar -->
     <div class="mal-bar" style="flex-wrap:wrap; gap:0.4rem 0.75rem;">
-      <select id="lag-eco" style="min-width:140px;">
-        <option value="">All ecosystems</option>
-        <option value="npm">npm</option>
-        <option value="PyPI">PyPI</option>
-        <option value="Maven">Maven</option>
-      </select>
+      <div id="lag-eco-chips" style="display:flex; gap:0.25rem;">
+        <button class="mal-source-chip active" data-eco="" style="background:#475569;">All</button>
+        <button class="mal-source-chip" data-eco="npm">npm</button>
+        <button class="mal-source-chip" data-eco="PyPI">PyPI</button>
+        <button class="mal-source-chip" data-eco="Maven">Maven</button>
+      </div>
       <div class="mal-source-chips" style="margin-bottom:0;" id="lag-source-chips">
         <button class="mal-source-chip active" data-source="" style="background:#475569;">All sources</button>
         <button class="mal-source-chip" data-source="chainguard" data-color="#3b82f6">● Sentinel</button>
@@ -3673,7 +3673,7 @@ const lagDDState = { page: 0, pageSize: 100, minS: null, maxS: null, total: 0 };
 
 function lagBuildStatsParams() {
   const p = new URLSearchParams();
-  const eco = document.getElementById('lag-eco').value;
+  const eco = document.querySelector('#lag-eco-chips .active')?.dataset.eco || '';
   const since = document.getElementById('lag-since').value;
   const until = document.getElementById('lag-until').value;
   const activeChip = document.querySelector('#lag-window-chips .active');
@@ -3947,11 +3947,26 @@ document.getElementById('lag-custom-days').addEventListener('change', function()
   if (this.value && parseInt(this.value) > 0) lagLoadStats();
 });
 
-['lag-eco','lag-since','lag-until'].forEach(id =>
+document.getElementById('lag-eco-chips').addEventListener('click', function(e) {
+  const chip = e.target.closest('.mal-source-chip');
+  if (!chip) return;
+  for (const c of this.querySelectorAll('.mal-source-chip')) {
+    c.classList.toggle('active', c === chip);
+    c.style.background = c === chip ? '#475569' : '';
+    c.style.borderColor = c === chip ? '#475569' : '';
+  }
+  lagScheduleStats(true);
+});
+['lag-since','lag-until'].forEach(id =>
   document.getElementById(id).addEventListener('change', () => lagScheduleStats(true))
 );
 document.getElementById('lag-clear-btn').addEventListener('click', () => {
-  document.getElementById('lag-eco').value = '';
+  for (const c of document.getElementById('lag-eco-chips').querySelectorAll('.mal-source-chip')) {
+    const active = c.dataset.eco === '';
+    c.classList.toggle('active', active);
+    c.style.background = active ? '#475569' : '';
+    c.style.borderColor = active ? '#475569' : '';
+  }
   document.getElementById('lag-since').value = '';
   document.getElementById('lag-until').value = '';
   // Reset window chips to 14d default
