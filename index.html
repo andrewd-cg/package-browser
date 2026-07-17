@@ -4036,8 +4036,8 @@ async function lagLoadTable() {
         <td style="font-size:0.78rem;">
           <span style="color:${escHtml(srcColor)};font-weight:600;">●</span> ${escHtml(r.source||'—')}${r.reason?.length ? ` <span class="tip" data-tip="${escHtml(r.reason.join(', '))}" style="color:#94a3b8;font-size:0.72rem;">ⓘ</span>` : ''}
         </td>
-        <td style="font-size:0.78rem;white-space:nowrap;" title="${escHtml(r.published_at||'')}">${r.published_at ? escHtml(malFmtDate(r.published_at)) : '<span style="color:#cbd5e1">—</span>'}</td>
-        <td style="font-size:0.78rem;white-space:nowrap;" title="${escHtml(r.blocked_at)}">${escHtml(malFmtDate(r.blocked_at))}</td>
+        <td style="font-size:0.78rem;white-space:nowrap;">${r.published_at ? escHtml(malFmtDate(r.published_at)) + ` <span class="tip" data-tip="${escHtml(formatDateExact(r.published_at))}" style="color:#94a3b8;font-size:0.72rem;">ⓘ</span>` : '<span style="color:#cbd5e1">—</span>'}</td>
+        <td style="font-size:0.78rem;white-space:nowrap;">${escHtml(malFmtDate(r.blocked_at))} <span class="tip" data-tip="${escHtml(formatDateExact(r.blocked_at))}" style="color:#94a3b8;font-size:0.72rem;">ⓘ</span></td>
         <td style="font-size:0.78rem;font-weight:600;white-space:nowrap;">${lag != null ? escHtml(malFmtLag(lag)) : '<span style="color:#cbd5e1">—</span>'}</td>
       </tr>`;
     }).join('')}
