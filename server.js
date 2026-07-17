@@ -46,6 +46,13 @@ db.exec(`
   }
 }
 
+// Ensure compound indexes for common TDD query patterns
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_malware_eco_pub   ON malware(ecosystem, published_at);
+  CREATE INDEX IF NOT EXISTS idx_malware_src_pub   ON malware(source, published_at);
+  CREATE INDEX IF NOT EXISTS idx_malware_eco_blk   ON malware(ecosystem, blocked_at DESC);
+`);
+
 const insertMalware = db.prepare(`
   INSERT OR REPLACE INTO malware
     (package_name, version, scope, malid, source, blocked_at, ecosystem, reason_json, description)
@@ -404,6 +411,9 @@ async function runMalwareSync({ token, full = false }) {
   }
 }
 
+const statsCache = new Map(); // key → { result, expiresAt }
+const STATS_TTL = 30000; // 30 seconds
+
 Bun.serve({
   port: 3000,
   idleTimeout: 60,
@@ -723,8 +733,14 @@ Bun.serve({
       return new Response(JSON.stringify({ ...counts, enrichState: { ...enrichState } }), { headers: { 'Content-Type': 'application/json' } });
     }
 
-    // Detection lag statistics.
+    // Detection lag statistics (TTL-cached for 30s per unique param string).
     if (url.pathname === '/api/cgr-malware/stats') {
+      const cacheKey = url.search;
+      const cached = statsCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return new Response(cached.result, { headers: { 'Content-Type': 'application/json', 'X-Cache': 'HIT' } });
+      }
+
       const eco   = url.searchParams.get('eco')   || '';
       const since = url.searchParams.get('since') || '';
       const until = url.searchParams.get('until') || '';
@@ -804,7 +820,7 @@ Bun.serve({
         .map(b => histMap[b] || { bucket: b, n: 0, bySource: {} })
         .filter(b => b.n > 0);
 
-      return new Response(JSON.stringify({
+      const body = JSON.stringify({
         overall: {
           ...overall,
           median_s: percentileRows?.median_s ?? null,
@@ -814,7 +830,9 @@ Bun.serve({
         },
         byEco,
         histogram,
-      }), { headers: { 'Content-Type': 'application/json' } });
+      });
+      statsCache.set(cacheKey, { result: body, expiresAt: Date.now() + STATS_TTL });
+      return new Response(body, { headers: { 'Content-Type': 'application/json' } });
     }
 
     // Malware search (filtered, server-side).
