@@ -26,6 +26,13 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT
   );
+  CREATE TABLE IF NOT EXISTS sync_windows (
+    ecosystem    TEXT NOT NULL,
+    window_start TEXT NOT NULL,
+    window_end   TEXT NOT NULL,
+    synced_at    TEXT NOT NULL,
+    PRIMARY KEY (ecosystem, window_start)
+  );
 `);
 
 // Migration: add published_at column if not present
@@ -284,25 +291,52 @@ async function runMalwareSync({ token, full = false }) {
           `SELECT package_name, version, published_at FROM malware WHERE ecosystem = ? AND published_at IS NOT NULL`
         ).all(dbName);
         db.prepare(`DELETE FROM malware WHERE ecosystem = ?`).run(dbName);
+        db.prepare(`DELETE FROM sync_windows WHERE ecosystem = ?`).run(dbName);
       }
 
-      // For full resyncs, walk in monthly windows to avoid cursor expiry on large sessions.
-      // For incremental syncs, one window from MAX(blocked_at) is fine (small delta).
-      let windows;
-      if (full) {
-        // Generate monthly windows from 2026-01-01 up to now+1d
-        windows = [];
+      // Build list of monthly windows from 2026-01-01 to now+1d
+      function allMonthlyWindows() {
+        const wins = [];
         let cursor = new Date('2026-01-01T00:00:00Z');
         const end = new Date(Date.now() + 86400000);
         while (cursor < end) {
           const next = new Date(cursor);
           next.setUTCMonth(next.getUTCMonth() + 1);
-          windows.push({ since: cursor.toISOString(), until: next > end ? end.toISOString() : next.toISOString() });
+          wins.push({ since: cursor.toISOString(), until: (next > end ? end : next).toISOString() });
           cursor = next;
         }
+        return wins;
+      }
+
+      const markWindowDone = db.prepare(
+        `INSERT OR REPLACE INTO sync_windows (ecosystem, window_start, window_end, synced_at) VALUES (?, ?, ?, ?)`
+      );
+
+      let windows;
+      if (full) {
+        // Full resync: all monthly windows (already deleted rows above)
+        windows = allMonthlyWindows();
       } else {
+        // Delta: backfill any past months not yet marked complete, then fetch the
+        // current month + incremental delta so nothing is missed.
+        const currentMonthStart = new Date();
+        currentMonthStart.setUTCDate(1); currentMonthStart.setUTCHours(0,0,0,0);
+        const currentMonthStartISO = currentMonthStart.toISOString();
+
+        const allWins = allMonthlyWindows();
+        const completedSet = new Set(
+          db.prepare(`SELECT window_start FROM sync_windows WHERE ecosystem = ?`).all(dbName).map(r => r.window_start)
+        );
+        // Past months not yet completed = need backfill
+        const backfill = allWins.filter(w => w.since < currentMonthStartISO && !completedSet.has(w.since));
+        // Current month (always re-fetch, it's still accumulating entries)
+        const currentWin = allWins.find(w => w.since === currentMonthStartISO);
+        // Incremental delta from MAX(blocked_at) to catch anything after current window start
         const latest = db.prepare(`SELECT MAX(blocked_at) AS m FROM malware WHERE ecosystem = ?`).get(dbName);
-        windows = [{ since: latest?.m || '2026-01-01T00:00:00Z', until: null }];
+        const deltaWin = { since: latest?.m || currentMonthStartISO, until: null };
+
+        windows = [...backfill, ...(currentWin ? [currentWin] : []), deltaWin];
+        if (backfill.length) console.log(`[${dbName}] backfilling ${backfill.length} missing month(s): ${backfill.map(w => w.since.slice(0,7)).join(', ')}`);
       }
 
       for (const window of windows) {
@@ -312,10 +346,8 @@ async function runMalwareSync({ token, full = false }) {
           params.set('since', window.since);
           if (window.until) params.set('until', window.until);
           if (pageToken) params.set('pageToken', pageToken);
-          // Always use the current global platformToken so mid-sync auto-refreshes are picked up
           let res = await fetch(`${apiBase}?${params}`, { headers: { Authorization: `Bearer ${platformToken}` } });
           if (res.status === 401) {
-            // Token expired mid-sync — try to refresh once via chainctl then retry
             console.log(`Token expired mid-sync (${apiName}), attempting chainctl refresh…`);
             const refreshed = await refreshPlatformTokenViaChainctl();
             if (!refreshed) throw new Error(`HTTP 401 from Platform API (${apiName}) — token expired and chainctl refresh failed`);
@@ -334,6 +366,15 @@ async function runMalwareSync({ token, full = false }) {
           insertItems(items, dbName);
           if (!data.nextPageToken || items.length === 0) break;
           pageToken = data.nextPageToken;
+        }
+        // Mark past windows complete (not the open-ended delta or current month)
+        if (window.until) {
+          const windowEnd = new Date(window.until);
+          const now = new Date();
+          // Only mark as complete if the window is fully in the past
+          if (windowEnd <= now) {
+            markWindowDone.run(dbName, window.since, window.until, new Date().toISOString());
+          }
         }
       }
 
