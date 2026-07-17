@@ -829,6 +829,8 @@ Bun.serve({
       const exact     = url.searchParams.get('exact')     === '1';
       const lag_min_s = url.searchParams.get('lag_min_s') || '';
       const lag_max_s = url.searchParams.get('lag_max_s') || '';
+      const pub_since = url.searchParams.get('pub_since') || '';
+      const pub_until = url.searchParams.get('pub_until') || '';
       const limit   = Math.min(parseInt(url.searchParams.get('limit')  || '200', 10) || 200, 1000);
       const offset  = parseInt(url.searchParams.get('offset') || '0',  10) || 0;
 
@@ -840,6 +842,8 @@ Bun.serve({
       if (src)   { where.push('source = ?');          args.push(src); }
       if (since) { where.push('blocked_at >= ?');     args.push(since); }
       if (until) { where.push('blocked_at <  ?');     args.push(until); }
+      if (pub_since) { where.push(`published_at IS NOT NULL AND published_at NOT IN ('NOT_FOUND','ERROR') AND published_at >= ?`); args.push(pub_since); }
+      if (pub_until) { where.push(`published_at IS NOT NULL AND published_at NOT IN ('NOT_FOUND','ERROR') AND published_at <  ?`); args.push(pub_until); }
       if (lag_min_s || lag_max_s) {
         where.push(`published_at IS NOT NULL AND published_at NOT IN ('NOT_FOUND','ERROR')`);
         const lagCol = `(julianday(blocked_at)-julianday(published_at))*86400.0`;

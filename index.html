@@ -4031,7 +4031,9 @@ async function lagLoadTable() {
         <td><a href="${escHtml(pkgLink(r.package_name, r.ecosystem))}" target="_blank" rel="noopener" style="font-family:monospace;font-size:0.8rem;">${escHtml(r.package_name)}</a></td>
         <td style="font-size:0.8rem;">${escHtml(r.version||'—')}</td>
         <td style="font-size:0.78rem;">${escHtml(r.ecosystem)}</td>
-        <td style="font-size:0.78rem;"><span style="color:${escHtml(srcColor)};font-weight:600;">●</span> ${escHtml(r.source||'—')}</td>
+        <td style="font-size:0.78rem;">
+          <span style="color:${escHtml(srcColor)};font-weight:600;">●</span> ${escHtml(r.source||'—')}${r.reason?.length ? ` <span title="${escHtml(r.reason.join(', '))}" style="color:#94a3b8;cursor:default;font-size:0.72rem;">ⓘ</span>` : ''}
+        </td>
         <td style="font-size:0.78rem;white-space:nowrap;" title="${escHtml(r.published_at||'')}">${r.published_at ? escHtml(malFmtDate(r.published_at)) : '<span style="color:#cbd5e1">—</span>'}</td>
         <td style="font-size:0.78rem;white-space:nowrap;" title="${escHtml(r.blocked_at)}">${escHtml(malFmtDate(r.blocked_at))}</td>
         <td style="font-size:0.78rem;font-weight:600;white-space:nowrap;">${lag != null ? escHtml(malFmtLag(lag)) : '<span style="color:#cbd5e1">—</span>'}</td>
