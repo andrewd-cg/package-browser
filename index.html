@@ -3810,10 +3810,12 @@ async function lagLoadDrillDown() {
   document.getElementById('lag-drilldown').style.display = 'block';
 }
 
+let _lagEnrichPolling = false;
 function lagAttachEnrichPolling() {
+  if (_lagEnrichPolling) return;
+  _lagEnrichPolling = true;
   const btn = document.getElementById('lag-enrich-btn');
   const progressWrap = document.getElementById('lag-enrich-progress');
-  if (btn.disabled) return;
   btn.disabled = true;
   progressWrap.style.display = 'flex';
   (async () => {
@@ -3832,6 +3834,7 @@ function lagAttachEnrichPolling() {
       if (!es.running) break;
       await new Promise(r => setTimeout(r, 800));
     }
+    _lagEnrichPolling = false;
     btn.disabled = false;
     setTimeout(() => { progressWrap.style.display = 'none'; }, 800);
     lagLoadStats();
