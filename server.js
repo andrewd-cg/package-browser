@@ -209,10 +209,15 @@ function scheduleTokenRefresh() {
   }, delay);
 }
 
-// Seed from env var on startup
+// Seed from env var on startup; if none set, try to mint via chainctl
 if (platformToken) {
   platformTokenExpiry = parsePlatformTokenExpiry(platformToken);
   if (platformTokenExpiry) scheduleTokenRefresh();
+} else {
+  refreshPlatformTokenViaChainctl().then(t => {
+    if (t) console.log('Platform token auto-minted via chainctl on startup');
+    else console.log('No platform token — paste one in Settings or mount chainctl config');
+  });
 }
 
 // ── Malware sync ──────────────────────────────────────────────────────────────
@@ -307,19 +312,20 @@ async function runMalwareSync({ token, full = false }) {
           params.set('since', window.since);
           if (window.until) params.set('until', window.until);
           if (pageToken) params.set('pageToken', pageToken);
-          const res = await fetch(`${apiBase}?${params}`, { headers: { Authorization: `Bearer ${token}` } });
+          // Always use the current global platformToken so mid-sync auto-refreshes are picked up
+          let res = await fetch(`${apiBase}?${params}`, { headers: { Authorization: `Bearer ${platformToken}` } });
+          if (res.status === 401) {
+            // Token expired mid-sync — try to refresh once via chainctl then retry
+            console.log(`Token expired mid-sync (${apiName}), attempting chainctl refresh…`);
+            const refreshed = await refreshPlatformTokenViaChainctl();
+            if (!refreshed) throw new Error(`HTTP 401 from Platform API (${apiName}) — token expired and chainctl refresh failed`);
+            res = await fetch(`${apiBase}?${params}`, { headers: { Authorization: `Bearer ${platformToken}` } });
+          }
           if (!res.ok) {
             let msg = `HTTP ${res.status} from Platform API (${apiName})`;
             if (res.status === 401) {
-              if (platformTokenExpiry) {
-                const expired = platformTokenExpiry < Date.now();
-                const ts = new Date(platformTokenExpiry).toISOString();
-                msg += expired
-                  ? ` — platform token expired at ${ts}, refresh with chainctl`
-                  : ` — platform token is set (expires ${ts}) but was rejected; it may not have the right audience`;
-              } else {
-                msg += ` — platform token has no expiry info; it may be invalid or missing`;
-              }
+              const ts = platformTokenExpiry ? new Date(platformTokenExpiry).toISOString() : 'unknown';
+              msg += ` — token rejected after refresh attempt (expires ${ts})`;
             }
             throw new Error(msg);
           }
