@@ -54,9 +54,14 @@ db.exec(`
 `);
 
 const insertMalware = db.prepare(`
-  INSERT OR REPLACE INTO malware
+  INSERT INTO malware
     (package_name, version, scope, malid, source, blocked_at, ecosystem, reason_json, description)
   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(ecosystem, package_name, version, malid, blocked_at) DO UPDATE SET
+    scope        = excluded.scope,
+    source       = excluded.source,
+    reason_json  = excluded.reason_json,
+    description  = excluded.description
 `);
 
 // ── Malware enrichment (publish-date fetch from registries) ──────────────────
