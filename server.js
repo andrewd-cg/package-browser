@@ -136,15 +136,18 @@ async function runMalwareEnrich() {
 
     const updateStmt = db.prepare(`UPDATE malware SET published_at = ? WHERE ecosystem = ? AND package_name = ? AND version = ?`);
 
-    const BATCH = 20;
+    const BATCH = 50;
+    const FETCH_TIMEOUT = 8000;
+    const withTimeout = (p) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), FETCH_TIMEOUT))]);
+
     for (let i = 0; i < pending.length; i += BATCH) {
       const batch = pending.slice(i, i + BATCH);
       await Promise.allSettled(batch.map(async ({ ecosystem, package_name }) => {
         try {
           let timeMap;
-          if (ecosystem === 'npm')        timeMap = await fetchNpmTimestamps(package_name);
-          else if (ecosystem === 'PyPI')  timeMap = await fetchPypiTimestamps(package_name);
-          else                            timeMap = await fetchMavenTimestamps(package_name);
+          if (ecosystem === 'npm')        timeMap = await withTimeout(fetchNpmTimestamps(package_name));
+          else if (ecosystem === 'PyPI')  timeMap = await withTimeout(fetchPypiTimestamps(package_name));
+          else                            timeMap = await withTimeout(fetchMavenTimestamps(package_name));
 
           const versions = db.prepare(
             `SELECT version FROM malware WHERE ecosystem = ? AND package_name = ? AND published_at IS NULL`
