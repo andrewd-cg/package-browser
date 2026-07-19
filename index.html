@@ -605,6 +605,43 @@
     cursor: help;
     border: 1px solid #fca5a5;
   }
+  /* ── Lockfile Scan ─────────────────────────────────────────────────────── */
+  .scan-summary { display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem; }
+  .scan-card {
+    flex:1 1 140px; min-width:140px; padding:0.9rem 1rem; border-radius:12px;
+    border:1px solid #e2e8f0; background:#fff;
+  }
+  .scan-card .sc-num { font-size:1.9rem; font-weight:800; line-height:1; }
+  .scan-card .sc-label { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.05em; color:#64748b; margin-top:0.35rem; }
+  .scan-card.danger  { background:#fef2f2; border-color:#fca5a5; }
+  .scan-card.danger  .sc-num { color:#b91c1c; }
+  .scan-card.warn    { background:#fffbeb; border-color:#fcd34d; }
+  .scan-card.warn    .sc-num { color:#b45309; }
+  .scan-card.ok      { background:#f0fdf4; border-color:#86efac; }
+  .scan-card.ok      .sc-num { color:#15803d; }
+  .scan-card.total   .sc-num { color:#1e293b; }
+  /* malware-version chips shown inline in the table (wrap within a bounded cell) */
+  .scan-mal-cell { display:flex; flex-wrap:wrap; gap:4px; max-width:260px; }
+  .scan-vchip {
+    font-family:'SFMono-Regular',Consolas,monospace; font-size:0.72rem; padding:1px 6px;
+    border-radius:5px; display:inline-flex; align-items:center;
+    white-space:nowrap; cursor:help;
+    background:#fee2e2; color:#c0322b; border:1px solid #fecaca;  /* lighter pastel red = malicious, not near */
+  }
+  .scan-vchip.near { background:#fca5a5; color:#7f1d1d; border-color:#f87171; font-weight:700; }  /* darker pastel red = malicious, near your version */
+  .scan-vchip.inuse { background:#dc2626; color:#fff; border-color:#b91c1c; font-weight:700; gap:5px; }
+  .scan-inuse-tag { font-size:0.6rem; font-weight:700; }
+  table.scan-table { width:100%; border-collapse:collapse; font-size:0.82rem; }
+  table.scan-table th, table.scan-table td { padding:6px 10px; text-align:left; border-bottom:1px solid #f1f5f9; vertical-align:top; }
+  table.scan-table th { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.04em; color:#64748b; background:#f8fafc; position:sticky; top:0; }
+  table.scan-table tr.row-exact { background:#fef2f2; }
+  table.scan-table tr.row-had   { background:#fffdf5; }
+  table.scan-table td.mono { font-family:'SFMono-Regular',Consolas,monospace; font-size:0.78rem; }
+  .scan-src { font-family:'SFMono-Regular',Consolas,monospace; font-size:0.74rem; color:#64748b; word-break:break-all; }
+  .scan-status-pill { font-size:0.68rem; font-weight:700; padding:2px 8px; border-radius:99px; white-space:nowrap; }
+  .scan-status-pill.exact { background:#dc2626; color:#fff; }
+  .scan-status-pill.had   { background:#fef3c7; color:#92400e; border:1px solid #fcd34d; }
+  .scan-status-pill.clean { background:#f1f5f9; color:#94a3b8; }
   .badge-prov {
     background: #dcfce7;
     color: #15803d;
@@ -699,6 +736,7 @@
     <button class="tab-btn" data-tab="maven">maven</button>
     <button class="tab-btn" data-tab="pypi">pypi</button>
     <button class="tab-btn" data-tab="bulk">bulk check</button>
+    <button class="tab-btn" data-tab="scan">Lockfile Scan</button>
     <button class="tab-btn" data-tab="lag">Malware Detection</button>
   </nav>
   <button id="settings-btn" title="Settings" aria-label="Settings">
@@ -886,6 +924,40 @@
       <div class="status-placeholder">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
         Paste a package.json or requirements.txt above to check Chainguard coverage
+      </div>
+    </div>
+  </div>
+
+  <!-- Lockfile Scan tab -->
+  <div id="tab-scan" class="tab-pane">
+    <form class="search-box" id="scan-form" style="flex-wrap:wrap; gap:0.5rem;">
+      <div class="bulk-drop-zone" id="scan-drop-zone">
+        <textarea id="scan-input" class="pkg-input"
+          placeholder="Paste or drag &amp; drop an npm package-lock.json — every resolved package is checked against the Chainguard malware database"
+          rows="6"
+          style="resize:vertical; font-family:'SFMono-Regular',Consolas,monospace; font-size:0.82rem; width:100%; box-sizing:border-box; height:auto;"
+          spellcheck="false"
+          autocomplete="off"></textarea>
+      </div>
+      <div style="display:flex; align-items:center; gap:0.75rem; flex:1 1 100%; flex-wrap:wrap;">
+        <label style="font-size:0.85rem; color:#475569; white-space:nowrap; display:flex; align-items:center; gap:0.4rem;">
+          Load file:
+          <input type="file" id="scan-file-input" accept=".json" style="font-size:0.82rem;">
+        </label>
+        <button type="submit" class="fetch-btn" id="scan-btn">Scan lockfile</button>
+        <button type="button" class="copy-btn" onclick="scanClear()">Clear</button>
+        <label class="filter-label" style="margin-left:auto;"><input type="checkbox" id="scan-fetch-dates" checked> Fetch publish dates from npm</label>
+      </div>
+    </form>
+    <div class="banners" id="scan-banners"></div>
+    <div id="scan-progress-wrap" style="display:none; padding:0 0 0.25rem;" class="bulk-progress">
+      <span id="scan-progress-text">Scanning…</span>
+      <div class="bulk-progress-bar"><div class="bulk-progress-fill" id="scan-progress-fill" style="width:0%"></div></div>
+    </div>
+    <div class="results" id="scan-results">
+      <div class="status-placeholder">
+        <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        Upload a package-lock.json to scan every dependency against the malware database
       </div>
     </div>
   </div>
@@ -1494,8 +1566,8 @@ tabBtns.forEach(btn => {
     tabBtns.forEach(b => b.classList.toggle('active', b === btn));
     document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id === `tab-${tab}`));
     document.body.dataset.activeTab = tab;
-    const TAB_LABELS = { lag: 'Malware Detection', bulk: 'bulk check' };
-    const HIDE_SUFFIX = new Set(['lag']);
+    const TAB_LABELS = { lag: 'Malware Detection', bulk: 'bulk check', scan: 'Lockfile Scan' };
+    const HIDE_SUFFIX = new Set(['lag', 'scan']);
     tabLabel.textContent = TAB_LABELS[tab] ?? tab;
     document.getElementById('tab-suffix').style.display = HIDE_SUFFIX.has(tab) ? 'none' : '';
   });
@@ -1508,6 +1580,7 @@ const state = {
   maven: { lastData: null, lastSnapshot: null, sort: { key: 'version', dir: -1 } },
   pypi:  { lastData: null, lastSnapshot: null, sort: { key: 'version', dir: -1 } },
   bulk:  { lastData: null,                     sort: { key: 'pkg',     dir:  1 } },
+  scan:  { packages: null },
 };
 
 // ── npm tab ───────────────────────────────────────────────────────────────────
@@ -3140,6 +3213,277 @@ document.getElementById('bulk-form').addEventListener('submit', async (e) => {
     bulkRenderTable(results, null, ecosystem);
   } catch (err) {
     document.getElementById('bulk-results').innerHTML =
+      `<div class="status-placeholder">Unexpected error: ${escHtml(err.message)}</div>`;
+  } finally {
+    btn.disabled = false;
+    progressWrap.style.display = 'none';
+  }
+});
+
+// ── Lockfile Scan tab ─────────────────────────────────────────────────────────
+
+// Rich package-lock.json parser: per-package {name, version, resolved,
+// integrity, dev, link}. Handles lockfileVersion 2/3 (packages{}) and v1
+// (dependencies{}, recursive).
+function scanParseLock(text) {
+  let obj;
+  try { obj = JSON.parse(text); } catch { return { error: 'That is not valid JSON.' }; }
+  if (obj.lockfileVersion == null && !obj.packages && !obj.dependencies) {
+    return { error: 'This does not look like a package-lock.json (no lockfileVersion / packages / dependencies).' };
+  }
+  const out = [];
+  const seen = new Set();
+  const add = (name, entry) => {
+    if (!name || !entry) return;
+    const version = entry.version || '';
+    const key = name + '@' + version;
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push({
+      name, version,
+      resolved: entry.resolved || null,
+      integrity: entry.integrity || null,
+      dev: !!(entry.dev || entry.devOptional),
+    });
+  };
+  if (obj.packages && Object.keys(obj.packages).length) {
+    // v2/v3: keys are "node_modules/foo" (or nested). Root "" and workspace links skipped.
+    for (const [key, entry] of Object.entries(obj.packages)) {
+      if (!key) continue;
+      if (entry.link) continue;
+      const segs = key.split('node_modules/');
+      const name = segs[segs.length - 1].replace(/\/$/, '');
+      add(name, entry);
+    }
+  } else if (obj.dependencies) {
+    // v1: recursive dependencies tree.
+    const walk = (deps) => {
+      for (const [name, entry] of Object.entries(deps)) {
+        add(name, entry);
+        if (entry.dependencies) walk(entry.dependencies);
+      }
+    };
+    walk(obj.dependencies);
+  }
+  if (!out.length) return { error: 'No resolved packages found in the lockfile.' };
+  return { packages: out, lockfileVersion: obj.lockfileVersion ?? 1, rootName: obj.name || null };
+}
+
+// Classify one lock package against its malware rows.
+function scanClassify(pkg, malRows) {
+  if (!malRows || !malRows.length) return { status: 'clean', malRows: [] };
+  const pkgWide = malRows.filter(m => m.scope === 'package' || !m.version);
+  const exact   = malRows.filter(m => m.version && m.version === pkg.version);
+  if (exact.length || pkgWide.length) {
+    return { status: 'exact', malRows, exactRows: exact.length ? exact : pkgWide, pkgWide: pkgWide.length > 0 };
+  }
+  return { status: 'had', malRows: malRows.filter(m => m.version) };
+}
+
+function scanSourceHost(resolved) {
+  if (!resolved) return null;
+  try { return new URL(resolved).host; } catch { return resolved; }
+}
+
+// Fetch npm publish-time maps (name → {version: iso}). Cached per name so
+// scoped/duplicated packages only cost one request.
+async function scanFetchDates(packages, onProgress) {
+  const names = [...new Set(packages.map(p => p.name))];
+  const timeByName = new Map();
+  let done = 0;
+  await runWithConcurrency(names, 10, async (name) => {
+    try {
+      const r = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}`);
+      if (r.ok) { const d = await r.json(); timeByName.set(name, d.time || {}); }
+    } catch { /* leave undated */ }
+    done++;
+    onProgress(done, names.length);
+  });
+  return timeByName;
+}
+
+// Multi-line tooltip text for one malware DB row.
+function scanMalMeta(m) {
+  return [
+    `${m.version || '(whole package)'} — flagged as malware`,
+    `Source: ${srcLabel(m.source)}`,
+    m.blocked_at ? `Blocked: ${m.blocked_at.slice(0, 10)}` : null,
+    (m.reason || []).length ? `Reasons: ${m.reason.join(', ')}` : null,
+    m.description || null,
+  ].filter(Boolean).join('\n');
+}
+
+// Version proximity of a flagged version to the pinned one.
+const SCAN_DIST_RANK = { patch: 0, minor: 1, major: 2 };
+function scanVersionDistance(flagged, pinned) {
+  const a = semverParse(flagged).parts, b = semverParse(pinned).parts;
+  if ((a[0] || 0) !== (b[0] || 0)) return 'major';
+  if ((a[1] || 0) !== (b[1] || 0)) return 'minor';
+  return 'patch';
+}
+function scanByCloseness(pinned) {
+  return (a, b) =>
+    (SCAN_DIST_RANK[scanVersionDistance(a.version, pinned)] - SCAN_DIST_RANK[scanVersionDistance(b.version, pinned)])
+    || semverCompare(b.version, a.version);
+}
+
+// One flagged-version chip: shows the version, direction (↑ newer / ↓ older) and
+// how far (patch/minor/major) from the pinned version. Immediate neighbours
+// (±1 patch on the same minor) get an amber outline — the scariest near-miss.
+function scanFlaggedChip(m, pinned) {
+  // "near" = same major.minor as the pinned version (a patch away) — the scariest.
+  const near = scanVersionDistance(m.version, pinned) === 'patch';
+  return `<span class="scan-vchip${near ? ' near' : ''}" title="${escHtml(scanMalMeta(m))}">${escHtml(m.version)}</span>`;
+}
+
+// The "Malware versions" cell — the enriched detail per row.
+function scanMalwareCell(p) {
+  if (p.status === 'clean') return '<span style="color:#cbd5e1">—</span>';
+  let chips;
+  if (p.status === 'exact') {
+    const tip = (p.exactRows || []).map(scanMalMeta).join('\n\n');
+    const inuse = `<span class="scan-vchip inuse" title="${escHtml(tip)}">${escHtml(p.version)}<span class="scan-inuse-tag">◆ IN USE</span></span>`;
+    const others = (p.malRows || []).filter(m => m.version && m.version !== p.version)
+      .sort(scanByCloseness(p.version)).map(m => scanFlaggedChip(m, p.version)).join('');
+    const wide = p.pkgWide ? '<span class="scan-vchip" style="color:#991b1b;">whole package</span>' : '';
+    chips = inuse + others + wide;
+  } else {
+    // had: flagged versions, closest to the pinned version first.
+    chips = p.malRows.slice().sort(scanByCloseness(p.version)).map(m => scanFlaggedChip(m, p.version)).join('');
+  }
+  return `<div class="scan-mal-cell">${chips}</div>`;
+}
+
+function scanRenderTable(packages) {
+  const order = { exact: 0, had: 1, clean: 2 };
+  const rows = packages.slice().sort((a, b) =>
+    (order[a.status] - order[b.status]) || a.name.localeCompare(b.name) || semverCompare(a.version, b.version));
+  const body = rows.map(p => {
+    const host = scanSourceHost(p.resolved);
+    const srcTip = [p.resolved, p.integrity].filter(Boolean).join('\n');
+    const pill = p.status === 'exact'
+      ? '<span class="scan-status-pill exact">MALWARE</span>'
+      : p.status === 'had'
+        ? '<span class="scan-status-pill had">had malware</span>'
+        : '<span class="scan-status-pill clean">clean</span>';
+    const rowCls = p.status === 'exact' ? 'row-exact' : p.status === 'had' ? 'row-had' : '';
+    return `<tr class="${rowCls}">
+      <td>${pill}</td>
+      <td class="mono">${escHtml(p.name)}${p.dev ? ' <span class="scan-status-pill clean">dev</span>' : ''}</td>
+      <td class="mono">${escHtml(p.version)}</td>
+      <td>${scanMalwareCell(p)}</td>
+      <td>${p.published ? escHtml(formatDate(p.published)) : '<span style="color:#cbd5e1">—</span>'}</td>
+      <td>${host ? `<span class="scan-src" title="${escHtml(srcTip)}">${escHtml(host)}</span>` : '<span style="color:#cbd5e1">—</span>'}</td>
+    </tr>`;
+  }).join('');
+  return `<div class="table-wrap"><table class="scan-table">
+    <thead><tr><th>Status</th><th>Package</th><th>In use</th><th>Malware versions</th><th>Published</th><th>Source</th></tr></thead>
+    <tbody>${body}</tbody>
+  </table></div>`;
+}
+
+function scanRender(data) {
+  const { packages } = data;
+  const exact = packages.filter(p => p.status === 'exact').length;
+  const had   = packages.filter(p => p.status === 'had').length;
+  const clean = packages.length - exact - had;
+
+  const cards = `<div class="scan-summary">
+    <div class="scan-card total"><div class="sc-num">${packages.length}</div><div class="sc-label">Packages scanned</div></div>
+    <div class="scan-card danger"><div class="sc-num">${exact}</div><div class="sc-label">Known malware</div></div>
+    <div class="scan-card warn"><div class="sc-num">${had}</div><div class="sc-label">Has had malware</div></div>
+    <div class="scan-card ok"><div class="sc-num">${clean}</div><div class="sc-label">Clean</div></div>
+  </div>`;
+
+  document.getElementById('scan-results').innerHTML = cards + scanRenderTable(packages);
+}
+
+function scanClear() {
+  document.getElementById('scan-input').value = '';
+  document.getElementById('scan-banners').innerHTML = '';
+  document.getElementById('scan-results').innerHTML = `<div class="status-placeholder">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+    Upload a package-lock.json to scan every dependency against the malware database
+  </div>`;
+}
+
+function scanLoadFile(file) {
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = (ev) => { document.getElementById('scan-input').value = ev.target.result; };
+  reader.readAsText(file);
+}
+
+document.getElementById('scan-file-input').addEventListener('change', (e) => scanLoadFile(e.target.files[0]));
+{
+  const sdz = document.getElementById('scan-drop-zone');
+  sdz.addEventListener('dragover', (e) => { e.preventDefault(); sdz.classList.add('drag-over'); });
+  sdz.addEventListener('dragleave', (e) => { if (!sdz.contains(e.relatedTarget)) sdz.classList.remove('drag-over'); });
+  sdz.addEventListener('drop', (e) => {
+    e.preventDefault();
+    sdz.classList.remove('drag-over');
+    scanLoadFile(e.dataTransfer.files[0]);
+  });
+}
+
+document.getElementById('scan-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = document.getElementById('scan-input').value.trim();
+  const banners = document.getElementById('scan-banners');
+  banners.innerHTML = '';
+  if (!text) return;
+
+  const parsed = scanParseLock(text);
+  if (parsed.error) {
+    banners.innerHTML = `<div class="banner warn">${escHtml(parsed.error)}</div>`;
+    return;
+  }
+  const packages = parsed.packages;
+  const btn = document.getElementById('scan-btn');
+  btn.disabled = true;
+
+  const progressWrap = document.getElementById('scan-progress-wrap');
+  const progressText = document.getElementById('scan-progress-text');
+  const progressFill = document.getElementById('scan-progress-fill');
+  progressWrap.style.display = 'flex';
+  progressFill.style.width = '0%';
+  progressText.textContent = `Checking ${packages.length} packages against the malware database…`;
+  document.getElementById('scan-results').innerHTML =
+    `<div class="status-placeholder"><div class="spinner"></div>Scanning ${packages.length} packages…</div>`;
+
+  try {
+    // 1) One bulk malware lookup for every package name.
+    const res = await fetch('/api/cgr-malware/bulk-check', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ecosystem: 'npm', packages: packages.map(p => p.name) }),
+    });
+    if (!res.ok) throw new Error(`malware lookup failed (HTTP ${res.status})`);
+    const { results } = await res.json();
+
+    for (const p of packages) Object.assign(p, scanClassify(p, results[p.name]));
+
+    // 2) Optionally enrich with npm publish dates (progress-tracked).
+    if (document.getElementById('scan-fetch-dates').checked) {
+      const timeByName = await scanFetchDates(packages, (done, total) => {
+        progressFill.style.width = `${Math.round(done / total * 100)}%`;
+        progressText.textContent = `Fetching publish dates: ${done} of ${total} packages…`;
+      });
+      for (const p of packages) {
+        const t = timeByName.get(p.name);
+        p.published = (t && t[p.version]) || null;
+      }
+    }
+
+    const exactN = packages.filter(p => p.status === 'exact').length;
+    const hadN   = packages.filter(p => p.status === 'had').length;
+    if (parsed.lockfileVersion < 2 && !exactN && !hadN) {
+      banners.innerHTML = `<div class="banner warn">Parsed a lockfileVersion 1 file — for the most complete transitive coverage, regenerate with a modern npm (lockfileVersion 3).</div>`;
+    }
+    state.scan = { packages };
+    scanRender({ packages });
+  } catch (err) {
+    document.getElementById('scan-results').innerHTML =
       `<div class="status-placeholder">Unexpected error: ${escHtml(err.message)}</div>`;
   } finally {
     btn.disabled = false;
