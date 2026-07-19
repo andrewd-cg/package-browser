@@ -942,6 +942,44 @@ Bun.serve({
       return new Response(JSON.stringify({ rows: out }), { headers: { 'Content-Type': 'application/json' } });
     }
 
+    // Bulk malware check for a list of package names (used by the Lockfile Scan
+    // tab). One request, chunked IN() queries — avoids hundreds of round-trips.
+    // Returns { results: { <package_name>: [ {version, scope, ...} ] } } keyed
+    // only for names that have at least one malware entry.
+    if (url.pathname === '/api/cgr-malware/bulk-check' && req.method === 'POST') {
+      const body = await req.json().catch(() => ({}));
+      const ecoParam = body.ecosystem || 'npm';
+      const ecoDbName = ecoParam === 'maven' ? 'Maven' : ecoParam === 'pypi' ? 'PyPI' : 'npm';
+      const names = Array.isArray(body.packages)
+        ? [...new Set(body.packages.filter(n => typeof n === 'string' && n))]
+        : [];
+      const SENTINELS = new Set(['NOT_FOUND', 'ERROR']);
+      const results = {};
+      const CHUNK = 500;
+      for (let i = 0; i < names.length; i += CHUNK) {
+        const chunk = names.slice(i, i + CHUNK);
+        const placeholders = chunk.map(() => '?').join(',');
+        const rows = db.prepare(`
+          SELECT package_name, version, scope, malid, source, blocked_at, reason_json, description, published_at
+          FROM malware
+          WHERE ecosystem = ? AND package_name IN (${placeholders})
+        `).all(ecoDbName, ...chunk);
+        for (const r of rows) {
+          (results[r.package_name] ||= []).push({
+            version: r.version,
+            scope: r.scope,
+            malid: r.malid,
+            source: r.source,
+            blocked_at: r.blocked_at,
+            reason: JSON.parse(r.reason_json || '[]'),
+            description: r.description,
+            published_at: (r.published_at && !SENTINELS.has(r.published_at)) ? r.published_at : null,
+          });
+        }
+      }
+      return new Response(JSON.stringify({ ecosystem: ecoDbName, results }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
     // Distinct reasons (for filter facets). Individual MAL-YYYY-N advisory IDs
     // are collapsed into a single "MAL-ID*" bucket; the row carries a
     // `searchAs` field so the client can submit a prefix to the search endpoint.
