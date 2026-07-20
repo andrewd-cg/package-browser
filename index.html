@@ -736,7 +736,7 @@
     <button class="tab-btn" data-tab="maven">maven</button>
     <button class="tab-btn" data-tab="pypi">pypi</button>
     <button class="tab-btn" data-tab="bulk">bulk check</button>
-    <button class="tab-btn" data-tab="scan">Lockfile Scan</button>
+    <button class="tab-btn" data-tab="scan">Dependency Scan</button>
     <button class="tab-btn" data-tab="lag">Malware Detection</button>
   </nav>
   <button id="settings-btn" title="Settings" aria-label="Settings">
@@ -933,7 +933,7 @@
     <form class="search-box" id="scan-form" style="flex-wrap:wrap; gap:0.5rem;">
       <div class="bulk-drop-zone" id="scan-drop-zone">
         <textarea id="scan-input" class="pkg-input"
-          placeholder="Paste or drag &amp; drop an npm package-lock.json — every resolved package is checked against the Chainguard malware database"
+          placeholder="Paste or drag &amp; drop an npm package-lock.json or a Python requirements.txt / poetry.lock — every pinned package is checked against the Chainguard malware database"
           rows="6"
           style="resize:vertical; font-family:'SFMono-Regular',Consolas,monospace; font-size:0.82rem; width:100%; box-sizing:border-box; height:auto;"
           spellcheck="false"
@@ -942,11 +942,11 @@
       <div style="display:flex; align-items:center; gap:0.75rem; flex:1 1 100%; flex-wrap:wrap;">
         <label style="font-size:0.85rem; color:#475569; white-space:nowrap; display:flex; align-items:center; gap:0.4rem;">
           Load file:
-          <input type="file" id="scan-file-input" accept=".json" style="font-size:0.82rem;">
+          <input type="file" id="scan-file-input" accept=".json,.txt,.lock" style="font-size:0.82rem;">
         </label>
-        <button type="submit" class="fetch-btn" id="scan-btn">Scan lockfile</button>
+        <button type="submit" class="fetch-btn" id="scan-btn">Scan dependencies</button>
         <button type="button" class="copy-btn" onclick="scanClear()">Clear</button>
-        <label class="filter-label" style="margin-left:auto;"><input type="checkbox" id="scan-fetch-dates" checked> Fetch publish dates from npm</label>
+        <label class="filter-label" style="margin-left:auto;"><input type="checkbox" id="scan-fetch-dates" checked> Fetch publish dates &amp; sources</label>
       </div>
     </form>
     <div class="banners" id="scan-banners"></div>
@@ -957,7 +957,7 @@
     <div class="results" id="scan-results">
       <div class="status-placeholder">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-        Upload a package-lock.json to scan every dependency against the malware database
+        Upload a package-lock.json or requirements.txt to scan every dependency against the malware database
       </div>
     </div>
   </div>
@@ -1566,7 +1566,7 @@ tabBtns.forEach(btn => {
     tabBtns.forEach(b => b.classList.toggle('active', b === btn));
     document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id === `tab-${tab}`));
     document.body.dataset.activeTab = tab;
-    const TAB_LABELS = { lag: 'Malware Detection', bulk: 'bulk check', scan: 'Lockfile Scan' };
+    const TAB_LABELS = { lag: 'Malware Detection', bulk: 'bulk check', scan: 'Dependency Scan' };
     const HIDE_SUFFIX = new Set(['lag', 'scan']);
     tabLabel.textContent = TAB_LABELS[tab] ?? tab;
     document.getElementById('tab-suffix').style.display = HIDE_SUFFIX.has(tab) ? 'none' : '';
@@ -3225,12 +3225,35 @@ document.getElementById('bulk-form').addEventListener('submit', async (e) => {
 // Rich package-lock.json parser: per-package {name, version, resolved,
 // integrity, dev, link}. Handles lockfileVersion 2/3 (packages{}) and v1
 // (dependencies{}, recursive).
-function scanParseLock(text) {
-  let obj;
-  try { obj = JSON.parse(text); } catch { return { error: 'That is not valid JSON.' }; }
-  if (obj.lockfileVersion == null && !obj.packages && !obj.dependencies) {
-    return { error: 'This does not look like a package-lock.json (no lockfileVersion / packages / dependencies).' };
+// PEP 503 normalized name (lowercase, runs of -_. collapsed to a single -).
+// PyPI treats these as equivalent; the malware DB may store either form, so we
+// look up both the raw and normalized name.
+function pep503(name) { return name.toLowerCase().replace(/[-_.]+/g, '-'); }
+
+// Extract an exact "==" / "===" pin from a requirements.txt version spec.
+// Ranges, compound specs, and wildcards yield '' (no exact version to match).
+function scanExactPin(spec) {
+  if (!spec) return '';
+  const m = spec.match(/^\s*===?\s*([^,\s;]+)\s*$/);
+  if (!m) return '';
+  return m[1].endsWith('.*') ? '' : m[1];
+}
+
+// Dispatch on file shape: JSON → npm package-lock; [[package]] → poetry.lock;
+// otherwise → requirements.txt. Returns { ecosystem, packages, ... } or { error }.
+function scanParse(text) {
+  const trimmed = text.trim();
+  if (trimmed.startsWith('{')) {
+    let obj;
+    try { obj = JSON.parse(trimmed); } catch { return { error: 'That is not valid JSON.' }; }
+    if (obj.lockfileVersion != null || obj.packages || obj.dependencies) return scanParseNpmLock(obj);
+    return { error: 'This JSON does not look like a package-lock.json (no lockfileVersion / packages / dependencies).' };
   }
+  if (trimmed.includes('[[package]]')) return scanParsePoetry(trimmed);
+  return scanParseRequirements(trimmed);
+}
+
+function scanParseNpmLock(obj) {
   const out = [];
   const seen = new Set();
   const add = (name, entry) => {
@@ -3266,7 +3289,32 @@ function scanParseLock(text) {
     walk(obj.dependencies);
   }
   if (!out.length) return { error: 'No resolved packages found in the lockfile.' };
-  return { packages: out, lockfileVersion: obj.lockfileVersion ?? 1, rootName: obj.name || null };
+  return { ecosystem: 'npm', packages: out, lockfileVersion: obj.lockfileVersion ?? 1, rootName: obj.name || null };
+}
+
+function scanParseRequirements(text) {
+  const parsed = parseRequirementsTxt(text);
+  if (!parsed) return { error: 'No packages found — expected a requirements.txt (one "package==version" per line).' };
+  const out = [];
+  const seen = new Set();
+  for (const { name, requestedVersion } of parsed.packages) {
+    const version = scanExactPin(requestedVersion);
+    const key = pep503(name) + '@' + version;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name, version, spec: requestedVersion, resolved: null, integrity: null, dev: false });
+  }
+  return { ecosystem: 'pypi', packages: out, unpinned: out.filter(p => !p.version).length };
+}
+
+function scanParsePoetry(text) {
+  const parsed = parsePoetryLock(text);
+  if (!parsed) return { error: 'Could not parse poetry.lock.' };
+  const out = parsed.packages.map(p => ({
+    name: p.name, version: p.requestedVersion || '', spec: p.requestedVersion || '',
+    resolved: null, integrity: null, dev: false,
+  }));
+  return { ecosystem: 'pypi', packages: out, unpinned: out.filter(p => !p.version).length };
 }
 
 // Classify one lock package against its malware rows.
@@ -3285,21 +3333,37 @@ function scanSourceHost(resolved) {
   try { return new URL(resolved).host; } catch { return resolved; }
 }
 
-// Fetch npm publish-time maps (name → {version: iso}). Cached per name so
-// scoped/duplicated packages only cost one request.
-async function scanFetchDates(packages, onProgress) {
+// Fetch publish dates (and, for PyPI, source URLs) per package name, keyed
+// name → { times: {version: iso}, sources: {version: url} }. Cached per name so
+// duplicated packages only cost one request. Registries allow cross-origin GETs.
+async function scanFetchDates(eco, packages, onProgress) {
   const names = [...new Set(packages.map(p => p.name))];
-  const timeByName = new Map();
+  const byName = new Map();
   let done = 0;
   await runWithConcurrency(names, 10, async (name) => {
     try {
-      const r = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}`);
-      if (r.ok) { const d = await r.json(); timeByName.set(name, d.time || {}); }
+      if (eco === 'pypi') {
+        const r = await fetch(`https://pypi.org/pypi/${encodeURIComponent(name)}/json`);
+        if (r.ok) {
+          const d = await r.json();
+          const times = {}, sources = {};
+          for (const [ver, files] of Object.entries(d.releases || {})) {
+            if (!files || !files.length) continue;
+            const f = files.find(x => x.packagetype === 'sdist') || files[0];
+            times[ver] = f.upload_time_iso_8601 || (f.upload_time ? f.upload_time + 'Z' : null);
+            sources[ver] = f.url || null;
+          }
+          byName.set(name, { times, sources });
+        }
+      } else {
+        const r = await fetch(`https://registry.npmjs.org/${encodeURIComponent(name)}`);
+        if (r.ok) { const d = await r.json(); byName.set(name, { times: d.time || {}, sources: {} }); }
+      }
     } catch { /* leave undated */ }
     done++;
     onProgress(done, names.length);
   });
-  return timeByName;
+  return byName;
 }
 
 // Multi-line tooltip text for one malware DB row.
@@ -3313,51 +3377,67 @@ function scanMalMeta(m) {
   ].filter(Boolean).join('\n');
 }
 
-// Version proximity of a flagged version to the pinned one.
+// Version proximity of a flagged version to the pinned one — ecosystem-aware
+// (npm semver vs PEP 440). "patch" = same major.minor, "minor" = same major.
 const SCAN_DIST_RANK = { patch: 0, minor: 1, major: 2 };
-function scanVersionDistance(flagged, pinned) {
-  const a = semverParse(flagged).parts, b = semverParse(pinned).parts;
-  if ((a[0] || 0) !== (b[0] || 0)) return 'major';
-  if ((a[1] || 0) !== (b[1] || 0)) return 'minor';
+function scanVerCompare(eco, a, b) { return eco === 'pypi' ? pypiVersionCompare(a, b) : semverCompare(a, b); }
+function scanReleaseParts(eco, v) {
+  if (eco === 'pypi') { const p = pypiVersionParts(v); return [p[1] || 0, p[2] || 0, p[3] || 0]; }
+  const p = semverParse(v).parts; return [p[0] || 0, p[1] || 0, p[2] || 0];
+}
+function scanVersionDistance(eco, flagged, pinned) {
+  if (!pinned) return 'major'; // unpinned requirement — nothing is "near"
+  const a = scanReleaseParts(eco, flagged), b = scanReleaseParts(eco, pinned);
+  if (a[0] !== b[0]) return 'major';
+  if (a[1] !== b[1]) return 'minor';
   return 'patch';
 }
-function scanByCloseness(pinned) {
+function scanByCloseness(eco, pinned) {
   return (a, b) =>
-    (SCAN_DIST_RANK[scanVersionDistance(a.version, pinned)] - SCAN_DIST_RANK[scanVersionDistance(b.version, pinned)])
-    || semverCompare(b.version, a.version);
+    (SCAN_DIST_RANK[scanVersionDistance(eco, a.version, pinned)] - SCAN_DIST_RANK[scanVersionDistance(eco, b.version, pinned)])
+    || scanVerCompare(eco, b.version, a.version);
 }
 
-// One flagged-version chip: shows the version, direction (↑ newer / ↓ older) and
-// how far (patch/minor/major) from the pinned version. Immediate neighbours
-// (±1 patch on the same minor) get an amber outline — the scariest near-miss.
-function scanFlaggedChip(m, pinned) {
-  // "near" = same major.minor as the pinned version (a patch away) — the scariest.
-  const near = scanVersionDistance(m.version, pinned) === 'patch';
+// One flagged-version chip. "near" (a patch away — same major.minor) renders in
+// a darker pastel red; the version detail is on hover.
+function scanFlaggedChip(eco, m, pinned) {
+  const near = scanVersionDistance(eco, m.version, pinned) === 'patch';
   return `<span class="scan-vchip${near ? ' near' : ''}" title="${escHtml(scanMalMeta(m))}">${escHtml(m.version)}</span>`;
 }
 
+// Some packages have hundreds of malicious releases — cap the chips shown so the
+// cell stays readable, keeping the closest ones (which include any near-misses).
+const SCAN_MAX_CHIPS = 12;
+function scanChipList(eco, rows, pinned) {
+  const sorted = rows.slice().sort(scanByCloseness(eco, pinned));
+  const shown = sorted.slice(0, SCAN_MAX_CHIPS).map(m => scanFlaggedChip(eco, m, pinned)).join('');
+  const extra = sorted.length - SCAN_MAX_CHIPS;
+  if (extra <= 0) return shown;
+  const tip = sorted.slice(SCAN_MAX_CHIPS).map(m => m.version).join(', ');
+  return shown + `<span class="scan-vchip" style="background:#f8fafc;color:#64748b;border-color:#e2e8f0;" title="${escHtml(tip)}">+${extra} more</span>`;
+}
+
 // The "Malware versions" cell — the enriched detail per row.
-function scanMalwareCell(p) {
+function scanMalwareCell(eco, p) {
   if (p.status === 'clean') return '<span style="color:#cbd5e1">—</span>';
   let chips;
   if (p.status === 'exact') {
     const tip = (p.exactRows || []).map(scanMalMeta).join('\n\n');
-    const inuse = `<span class="scan-vchip inuse" title="${escHtml(tip)}">${escHtml(p.version)}<span class="scan-inuse-tag">◆ IN USE</span></span>`;
-    const others = (p.malRows || []).filter(m => m.version && m.version !== p.version)
-      .sort(scanByCloseness(p.version)).map(m => scanFlaggedChip(m, p.version)).join('');
+    const inuse = `<span class="scan-vchip inuse" title="${escHtml(tip)}">${escHtml(p.version || 'this package')}<span class="scan-inuse-tag">◆ IN USE</span></span>`;
+    const others = scanChipList(eco, (p.malRows || []).filter(m => m.version && m.version !== p.version), p.version);
     const wide = p.pkgWide ? '<span class="scan-vchip" style="color:#991b1b;">whole package</span>' : '';
     chips = inuse + others + wide;
   } else {
     // had: flagged versions, closest to the pinned version first.
-    chips = p.malRows.slice().sort(scanByCloseness(p.version)).map(m => scanFlaggedChip(m, p.version)).join('');
+    chips = scanChipList(eco, p.malRows, p.version);
   }
   return `<div class="scan-mal-cell">${chips}</div>`;
 }
 
-function scanRenderTable(packages) {
+function scanRenderTable(eco, packages) {
   const order = { exact: 0, had: 1, clean: 2 };
   const rows = packages.slice().sort((a, b) =>
-    (order[a.status] - order[b.status]) || a.name.localeCompare(b.name) || semverCompare(a.version, b.version));
+    (order[a.status] - order[b.status]) || a.name.localeCompare(b.name) || scanVerCompare(eco, a.version, b.version));
   const body = rows.map(p => {
     const host = scanSourceHost(p.resolved);
     const srcTip = [p.resolved, p.integrity].filter(Boolean).join('\n');
@@ -3367,11 +3447,14 @@ function scanRenderTable(packages) {
         ? '<span class="scan-status-pill had">had malware</span>'
         : '<span class="scan-status-pill clean">clean</span>';
     const rowCls = p.status === 'exact' ? 'row-exact' : p.status === 'had' ? 'row-had' : '';
+    const inUse = p.version
+      ? escHtml(p.version)
+      : (p.spec ? `<span style="color:#94a3b8;" title="No exact == pin — only package-level malware history checked">${escHtml(p.spec)}</span>` : '<span style="color:#cbd5e1">—</span>');
     return `<tr class="${rowCls}">
       <td>${pill}</td>
       <td class="mono">${escHtml(p.name)}${p.dev ? ' <span class="scan-status-pill clean">dev</span>' : ''}</td>
-      <td class="mono">${escHtml(p.version)}</td>
-      <td>${scanMalwareCell(p)}</td>
+      <td class="mono">${inUse}</td>
+      <td>${scanMalwareCell(eco, p)}</td>
       <td>${p.published ? escHtml(formatDate(p.published)) : '<span style="color:#cbd5e1">—</span>'}</td>
       <td>${host ? `<span class="scan-src" title="${escHtml(srcTip)}">${escHtml(host)}</span>` : '<span style="color:#cbd5e1">—</span>'}</td>
     </tr>`;
@@ -3383,7 +3466,7 @@ function scanRenderTable(packages) {
 }
 
 function scanRender(data) {
-  const { packages } = data;
+  const { packages, ecosystem } = data;
   const exact = packages.filter(p => p.status === 'exact').length;
   const had   = packages.filter(p => p.status === 'had').length;
   const clean = packages.length - exact - had;
@@ -3395,7 +3478,7 @@ function scanRender(data) {
     <div class="scan-card ok"><div class="sc-num">${clean}</div><div class="sc-label">Clean</div></div>
   </div>`;
 
-  document.getElementById('scan-results').innerHTML = cards + scanRenderTable(packages);
+  document.getElementById('scan-results').innerHTML = cards + scanRenderTable(ecosystem, packages);
 }
 
 function scanClear() {
@@ -3403,7 +3486,7 @@ function scanClear() {
   document.getElementById('scan-banners').innerHTML = '';
   document.getElementById('scan-results').innerHTML = `<div class="status-placeholder">
     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-    Upload a package-lock.json to scan every dependency against the malware database
+    Upload a package-lock.json or requirements.txt to scan every dependency against the malware database
   </div>`;
 }
 
@@ -3433,12 +3516,13 @@ document.getElementById('scan-form').addEventListener('submit', async (e) => {
   banners.innerHTML = '';
   if (!text) return;
 
-  const parsed = scanParseLock(text);
+  const parsed = scanParse(text);
   if (parsed.error) {
     banners.innerHTML = `<div class="banner warn">${escHtml(parsed.error)}</div>`;
     return;
   }
-  const packages = parsed.packages;
+  const { packages, ecosystem } = parsed;
+  const ecoLabel = ecosystem === 'pypi' ? 'PyPI' : 'npm';
   const btn = document.getElementById('scan-btn');
   btn.disabled = true;
 
@@ -3447,41 +3531,50 @@ document.getElementById('scan-form').addEventListener('submit', async (e) => {
   const progressFill = document.getElementById('scan-progress-fill');
   progressWrap.style.display = 'flex';
   progressFill.style.width = '0%';
-  progressText.textContent = `Checking ${packages.length} packages against the malware database…`;
+  progressText.textContent = `Checking ${packages.length} ${ecoLabel} packages against the malware database…`;
   document.getElementById('scan-results').innerHTML =
-    `<div class="status-placeholder"><div class="spinner"></div>Scanning ${packages.length} packages…</div>`;
+    `<div class="status-placeholder"><div class="spinner"></div>Scanning ${packages.length} ${ecoLabel} packages…</div>`;
 
   try {
-    // 1) One bulk malware lookup for every package name.
+    // 1) One bulk malware lookup for every package name. PyPI names are matched
+    //    against both the raw and PEP 503-normalized form (the DB stores either).
+    const lookupNames = ecosystem === 'pypi'
+      ? [...new Set(packages.flatMap(p => [p.name, pep503(p.name)]))]
+      : packages.map(p => p.name);
     const res = await fetch('/api/cgr-malware/bulk-check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ecosystem: 'npm', packages: packages.map(p => p.name) }),
+      body: JSON.stringify({ ecosystem, packages: lookupNames }),
     });
     if (!res.ok) throw new Error(`malware lookup failed (HTTP ${res.status})`);
     const { results } = await res.json();
 
-    for (const p of packages) Object.assign(p, scanClassify(p, results[p.name]));
+    for (const p of packages) {
+      const rows = ecosystem === 'pypi' ? (results[p.name] || results[pep503(p.name)]) : results[p.name];
+      Object.assign(p, scanClassify(p, rows));
+    }
 
-    // 2) Optionally enrich with npm publish dates (progress-tracked).
+    // 2) Optionally enrich with publish dates (and PyPI source URLs).
     if (document.getElementById('scan-fetch-dates').checked) {
-      const timeByName = await scanFetchDates(packages, (done, total) => {
+      const byName = await scanFetchDates(ecosystem, packages, (done, total) => {
         progressFill.style.width = `${Math.round(done / total * 100)}%`;
         progressText.textContent = `Fetching publish dates: ${done} of ${total} packages…`;
       });
       for (const p of packages) {
-        const t = timeByName.get(p.name);
-        p.published = (t && t[p.version]) || null;
+        const info = byName.get(p.name);
+        p.published = (info && p.version && info.times[p.version]) || null;
+        if (ecosystem === 'pypi' && info && p.version && info.sources[p.version]) p.resolved = info.sources[p.version];
       }
     }
 
-    const exactN = packages.filter(p => p.status === 'exact').length;
-    const hadN   = packages.filter(p => p.status === 'had').length;
-    if (parsed.lockfileVersion < 2 && !exactN && !hadN) {
+    const flagged = packages.some(p => p.status !== 'clean');
+    if (ecosystem === 'npm' && parsed.lockfileVersion < 2 && !flagged) {
       banners.innerHTML = `<div class="banner warn">Parsed a lockfileVersion 1 file — for the most complete transitive coverage, regenerate with a modern npm (lockfileVersion 3).</div>`;
+    } else if (ecosystem === 'pypi' && parsed.unpinned > 0) {
+      banners.innerHTML = `<div class="banner warn">${parsed.unpinned} of ${packages.length} requirement${parsed.unpinned !== 1 ? 's are' : ' is'} not pinned to an exact <code>==</code> version — those can only be checked for package-level malware history, not an exact-version hit. For a complete scan, use a fully pinned file (e.g. <code style="font-family:monospace;background:#fef3c7;padding:1px 4px;border-radius:3px">uv pip compile</code> output or <code style="font-family:monospace;background:#fef3c7;padding:1px 4px;border-radius:3px">pip freeze</code>).</div>`;
     }
-    state.scan = { packages };
-    scanRender({ packages });
+    state.scan = { packages, ecosystem };
+    scanRender({ packages, ecosystem });
   } catch (err) {
     document.getElementById('scan-results').innerHTML =
       `<div class="status-placeholder">Unexpected error: ${escHtml(err.message)}</div>`;
