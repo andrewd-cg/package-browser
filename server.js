@@ -189,16 +189,41 @@ let platformToken = process.env.PLATFORM_API_TOKEN || null;
 let platformTokenExpiry = null; // Unix timestamp (ms)
 let tokenRefreshTimer = null;
 
-function parsePlatformTokenExpiry(token) {
+// The malware blocklist API lives behind console-api; a token minted for any
+// other audience (e.g. the libraries.cgr.dev registry) is rejected with a
+// confusing HTTP 500, so we validate the aud claim up front.
+const EXPECTED_TOKEN_AUDIENCE = 'https://console-api.enforce.dev';
+
+function decodePlatformTokenPayload(token) {
   try {
-    const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
-    return payload.exp ? payload.exp * 1000 : null;
+    return JSON.parse(Buffer.from(token.split('.')[1], 'base64url').toString());
   } catch { return null; }
+}
+
+function parsePlatformTokenExpiry(token) {
+  const payload = decodePlatformTokenPayload(token);
+  return payload?.exp ? payload.exp * 1000 : null;
+}
+
+// Returns the aud claim as an array (JWT aud may be a string or array), or null.
+function parsePlatformTokenAudiences(token) {
+  const aud = decodePlatformTokenPayload(token)?.aud;
+  if (!aud) return null;
+  return Array.isArray(aud) ? aud : [aud];
+}
+
+function tokenAudienceOk(token) {
+  const auds = parsePlatformTokenAudiences(token);
+  // If we can't read an aud claim, don't block — let the API be the judge.
+  return !auds || auds.includes(EXPECTED_TOKEN_AUDIENCE);
 }
 
 function setPlatformToken(token) {
   platformToken = token || null;
   platformTokenExpiry = token ? parsePlatformTokenExpiry(token) : null;
+  if (token && !tokenAudienceOk(token)) {
+    console.warn(`[platform-token] WARNING: token audience is ${JSON.stringify(parsePlatformTokenAudiences(token))}, expected ${EXPECTED_TOKEN_AUDIENCE} — malware sync will fail with HTTP 500`);
+  }
   if (tokenRefreshTimer) { clearTimeout(tokenRefreshTimer); tokenRefreshTimer = null; }
   if (platformTokenExpiry) scheduleTokenRefresh();
 }
@@ -253,7 +278,7 @@ function malwareStatus() {
   const total = counts.reduce((s, r) => s + r.n, 0);
   const lastSync = db.prepare(`SELECT value FROM sync_meta WHERE key = 'last_sync_at'`).get();
   const tokenStatus = platformToken
-    ? { set: true, expiresAt: platformTokenExpiry ? new Date(platformTokenExpiry).toISOString() : null }
+    ? { set: true, expiresAt: platformTokenExpiry ? new Date(platformTokenExpiry).toISOString() : null, audienceOk: tokenAudienceOk(platformToken) }
     : { set: false };
   const enrichCounts = db.prepare(`
     SELECT
@@ -706,6 +731,13 @@ Bun.serve({
     if (url.pathname === '/api/platform-token' && req.method === 'POST') {
       const body = await req.json().catch(() => ({}));
       const token = (body.token || '').trim();
+      if (token && !tokenAudienceOk(token)) {
+        const auds = parsePlatformTokenAudiences(token);
+        return new Response(JSON.stringify({
+          error: `Token has wrong audience (${auds ? auds.join(', ') : 'none'}). ` +
+                 `Mint one with: chainctl auth token --audience ${EXPECTED_TOKEN_AUDIENCE}`,
+        }), { status: 400, headers: { 'Content-Type': 'application/json' } });
+      }
       setPlatformToken(token || null);
       return new Response(JSON.stringify({ ok: true, status: malwareStatus().platformToken }), { headers: { 'Content-Type': 'application/json' } });
     }
