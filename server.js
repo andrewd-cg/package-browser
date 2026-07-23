@@ -368,19 +368,42 @@ async function runMalwareSync({ token, full = false }) {
           params.set('since', window.since);
           if (window.until) params.set('until', window.until);
           if (pageToken) params.set('pageToken', pageToken);
-          let res = await fetch(`${apiBase}?${params}`, { headers: { Authorization: `Bearer ${platformToken}` } });
-          if (res.status === 401) {
-            console.log(`Token expired mid-sync (${apiName}), attempting chainctl refresh…`);
-            const refreshed = await refreshPlatformTokenViaChainctl();
-            if (!refreshed) throw new Error(`HTTP 401 from Platform API (${apiName}) — token expired and chainctl refresh failed`);
+          let res;
+          for (let attempt = 1; ; attempt++) {
             res = await fetch(`${apiBase}?${params}`, { headers: { Authorization: `Bearer ${platformToken}` } });
-          }
-          if (!res.ok) {
+            if (res.status === 401) {
+              console.log(`Token expired mid-sync (${apiName}), attempting chainctl refresh…`);
+              const refreshed = await refreshPlatformTokenViaChainctl();
+              if (!refreshed) throw new Error(`HTTP 401 from Platform API (${apiName}) — token expired and chainctl refresh failed`);
+              res = await fetch(`${apiBase}?${params}`, { headers: { Authorization: `Bearer ${platformToken}` } });
+            }
+            if (res.ok) break;
+
+            // Non-OK: capture body + context so recurrences are diagnosable (the body is
+            // otherwise discarded, which is why past 500s left no trace to debug).
+            const bodyText = await res.text().catch(() => '<unreadable body>');
+            const reqId = res.headers.get('x-request-id') || res.headers.get('x-amzn-requestid') || res.headers.get('cf-ray') || null;
+            const ctx = `ecosystem=${apiName} since=${window.since} until=${window.until ?? '(open)'} page=${pageToken ? pageToken.slice(0, 16) + '…' : '1'}`;
+            console.error(
+              `[malware-sync] HTTP ${res.status} from Platform API — ${ctx}${reqId ? ` reqId=${reqId}` : ''}\n` +
+              `  url:  ${apiBase}?${params}\n` +
+              `  body: ${bodyText.slice(0, 1000)}`
+            );
+
+            // Transient 5xx / 429 → back off and retry a few times before failing the whole sync.
+            if ((res.status >= 500 || res.status === 429) && attempt <= 3) {
+              const backoff = 1000 * attempt;
+              console.warn(`[malware-sync] transient ${res.status}, retrying in ${backoff}ms (attempt ${attempt}/3)…`);
+              await new Promise(r => setTimeout(r, backoff));
+              continue;
+            }
+
             let msg = `HTTP ${res.status} from Platform API (${apiName})`;
             if (res.status === 401) {
               const ts = platformTokenExpiry ? new Date(platformTokenExpiry).toISOString() : 'unknown';
               msg += ` — token rejected after refresh attempt (expires ${ts})`;
             }
+            if (bodyText && bodyText !== '<unreadable body>') msg += `: ${bodyText.slice(0, 300)}`;
             throw new Error(msg);
           }
           const data = await res.json();
