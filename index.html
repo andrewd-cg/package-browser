@@ -676,7 +676,7 @@
   /* backported fixes — shield blue, not the green of the "clean" card */
   .scan-card.fix     { background:#f0f9ff; border-color:#7dd3fc; }
   .scan-card.fix     .sc-num { color:#0369a1; }
-  /* fixes an upgrade away — same blue, dashed to read as "not yours yet" */
+  /* fixes a minor upgrade away — same blue, dashed to read as "not yours yet" */
   .scan-card.upfix   { background:#fff; border-style:dashed; border-color:#7dd3fc; }
   .scan-card.upfix   .sc-num { color:#0369a1; }
   /* malware-version chips shown inline in the table (wrap within a bounded cell) */
@@ -874,7 +874,7 @@
     <button class="tab-btn" data-tab="bulk">bulk check</button>
     <button class="tab-btn" data-tab="scan">Dependency Scan</button>
     <button class="tab-btn" data-tab="lag">Malware Detection</button>
-    <button class="tab-btn" data-tab="vex">Backported Fixes</button>
+    <button class="tab-btn" data-tab="vex">Backported CVE Remediation</button>
   </nav>
   <button id="settings-btn" title="Settings" aria-label="Settings">
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -973,8 +973,8 @@
       <label class="filter-label"><input type="checkbox" id="maven-show-all"> Show all versions</label>
       <label class="filter-label"><input type="checkbox" id="maven-show-prerelease"> Show pre-release (alpha / beta / RC / snapshot)</label>
       <label class="filter-label"><input type="checkbox" id="maven-show-malware" checked> Show malware</label>
-      <label class="filter-label"><input type="checkbox" id="maven-show-vex"> Show backported fixes</label>
-      <label class="filter-label"><input type="checkbox" id="maven-only-vex"> Only backported fixes</label>
+      <label class="filter-label"><input type="checkbox" id="maven-show-vex"> Show backported CVE remediation</label>
+      <label class="filter-label"><input type="checkbox" id="maven-only-vex"> Only backported CVE remediation</label>
     </div>
     <div class="banners" id="maven-banners"></div>
     <div class="results" id="maven-results">
@@ -995,8 +995,8 @@
       <label class="filter-label"><input type="checkbox" id="pypi-show-all"> Show all versions</label>
       <label class="filter-label"><input type="checkbox" id="pypi-show-prerelease"> Show pre-release (a / b / rc / dev / post)</label>
       <label class="filter-label"><input type="checkbox" id="pypi-show-malware" checked> Show malware</label>
-      <label class="filter-label"><input type="checkbox" id="pypi-show-vex"> Show backported fixes</label>
-      <label class="filter-label"><input type="checkbox" id="pypi-only-vex"> Only backported fixes</label>
+      <label class="filter-label"><input type="checkbox" id="pypi-show-vex"> Show backported CVE remediation</label>
+      <label class="filter-label"><input type="checkbox" id="pypi-only-vex"> Only backported CVE remediation</label>
     </div>
     <div class="banners" id="pypi-banners"></div>
     <div class="results" id="pypi-results">
@@ -1074,7 +1074,7 @@
     <form class="search-box" id="scan-form" style="flex-wrap:wrap; gap:0.5rem;">
       <div class="bulk-drop-zone" id="scan-drop-zone">
         <textarea id="scan-input" class="pkg-input"
-          placeholder="Paste or drag &amp; drop an npm package-lock.json, a Python requirements.txt / poetry.lock, or a list of Maven group:artifact:version coordinates — every pinned package is checked against the Chainguard malware database and for backported CVE fixes"
+          placeholder="Paste or drag &amp; drop an npm package-lock.json, a Python requirements.txt / poetry.lock, or a list of Maven group:artifact:version coordinates — every pinned package is checked against the Chainguard malware database and for backported CVE remediation"
           rows="6"
           style="resize:vertical; font-family:'SFMono-Regular',Consolas,monospace; font-size:0.82rem; width:100%; box-sizing:border-box; height:auto;"
           spellcheck="false"
@@ -1090,9 +1090,9 @@
         <button type="button" class="copy-btn" id="scan-pdf-btn" disabled
           title="Opens the print dialog — choose &quot;Save as PDF&quot; as the destination for an A4 report of the packages with findings">Export PDF</button>
         <label class="filter-label" id="scan-print-all-label" style="display:none;"
-          title="By default the PDF lists only packages with known malware, malware history, or a backported fix available"><input type="checkbox" id="scan-print-all"> Include clean rows</label>
+          title="By default the PDF lists only packages with known malware, malware history, or backported CVE remediation available"><input type="checkbox" id="scan-print-all"> Include clean rows</label>
         <label class="filter-label" id="scan-upgrades-label" style="display:none;"
-          title="Also show CVE fixes waiting at a newer version of the same major — the smallest patch or minor upgrade that picks up backported fixes"><input type="checkbox" id="scan-show-upgrades"> Fixes an upgrade away</label>
+          title="Also show backported CVE remediation waiting at a newer version of the same major — the smallest patch or minor upgrade that picks it up"><input type="checkbox" id="scan-show-upgrades"> Fixes a minor upgrade away</label>
         <label class="filter-label" style="margin-left:auto;"><input type="checkbox" id="scan-fetch-dates" checked> Fetch publish dates</label>
       </div>
     </form>
@@ -1105,7 +1105,7 @@
     <div class="results" id="scan-results">
       <div class="status-placeholder">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-        Upload a package-lock.json, requirements.txt, or a list of Maven group:artifact:version coordinates to check every dependency against the malware database and for backported CVE fixes
+        Upload a package-lock.json, requirements.txt, or a list of Maven group:artifact:version coordinates to check every dependency against the malware database and for backported CVE remediation
       </div>
     </div>
   </div>
@@ -1225,7 +1225,7 @@
     <div class="banners" id="lag-banners"></div>
   </div>
 
-  <!-- backported fixes (VEX) tab -->
+  <!-- backported CVE remediation (VEX) tab -->
   <div id="tab-vex" class="tab-pane">
     <div class="mal-bar">
       <span><span class="mal-stat" id="vex-cves">0</span> distinct CVEs fixed across <span class="mal-stat" id="vex-pkgs">0</span> packages · Last sync: <span class="mal-stat" id="vex-last-sync">never</span></span>
@@ -1247,7 +1247,7 @@
     </div>
     <div class="vex-chart-wrap" id="vex-chart-wrap" style="display:none;">
       <div style="display:flex;align-items:center;gap:0.75rem;margin-bottom:0.25rem;">
-        <span id="vex-chart-title" style="font-size:0.78rem;color:#64748b;">New backported fixes per month</span>
+        <span id="vex-chart-title" style="font-size:0.78rem;color:#64748b;">New backported CVE remediations per month</span>
         <button type="button" class="copy-btn" id="vex-chart-back" style="display:none;">← All months</button>
         <span style="flex:1"></span>
         <span id="vex-chart-legend" style="display:flex;gap:0.75rem;font-size:0.72rem;color:#475569;"></span>
@@ -1499,7 +1499,7 @@ function buildVexMap(fixes) {
   return m;
 }
 
-// Badge shown (when the "backported fixes" filter is on) next to a version whose
+// Badge shown (when the "backported CVE remediation" filter is on) next to a version whose
 // Chainguard build backports one or more upstream vulnerability fixes.
 function vexBadgeHtml(vulns) {
   if (!vulns || !vulns.length) return '';
@@ -1510,7 +1510,7 @@ function vexBadgeHtml(vulns) {
     ...ids.slice(0, 15).map(x => `• ${x}`),
     ids.length > 15 ? `…and ${ids.length - 15} more` : null,
   ].filter(Boolean).join('\n');
-  return `<span class="badge-vex" title="${escHtml(tip)}">🛡 ${n} backported fix${n === 1 ? '' : 'es'}</span>`;
+  return `<span class="badge-vex" title="${escHtml(tip)}">🛡 ${n} backported CVE remediation${n === 1 ? '' : 's'}</span>`;
 }
 
 // Per-ecosystem cooldown windows from the org's Libraries policy (fetched once).
@@ -1885,7 +1885,7 @@ tabBtns.forEach(btn => {
     tabBtns.forEach(b => b.classList.toggle('active', b === btn));
     document.querySelectorAll('.tab-pane').forEach(p => p.classList.toggle('active', p.id === `tab-${tab}`));
     document.body.dataset.activeTab = tab;
-    const TAB_LABELS = { lag: 'Malware Detection', bulk: 'bulk check', scan: 'Dependency Scan', vex: 'Backported Fixes' };
+    const TAB_LABELS = { lag: 'Malware Detection', bulk: 'bulk check', scan: 'Dependency Scan', vex: 'Backported CVE Remediation' };
     const HIDE_SUFFIX = new Set(['lag', 'scan', 'vex']);
     tabLabel.textContent = TAB_LABELS[tab] ?? tab;
     document.getElementById('tab-suffix').style.display = HIDE_SUFFIX.has(tab) ? 'none' : '';
@@ -4006,7 +4006,7 @@ function scanMalwareCell(eco, p) {
   return `<div class="scan-mal-cell">${chips}</div>`;
 }
 
-// The "Backported fixes" cell: one chip per CVE Chainguard's build of the
+// The "Backported CVE remediation" cell: one chip per CVE Chainguard's build of the
 // version in use already fixes, so the vulnerability goes away without an
 // upgrade.
 const SCAN_MAX_FIXCHIPS = 8;
@@ -4081,9 +4081,9 @@ function scanRenderTable(eco, packages, showFixes, showUpgrades) {
     </tr>`;
   }).join('');
   const fixTip = showUpgrades
-    ? 'Green: CVEs already fixed in Chainguard\'s build of the version you use. Blue: fixes waiting a patch or minor upgrade away.'
+    ? 'Green: CVEs already remediated in Chainguard\'s build of the version you use. Blue: remediation waiting a patch or minor upgrade away.'
     : 'CVEs already fixed in Chainguard\'s build of the version you use';
-  const fixHead = showFixes ? `<th title="${escHtml(fixTip)}">Backported fixes</th>` : '';
+  const fixHead = showFixes ? `<th title="${escHtml(fixTip)}">Backported CVE remediation</th>` : '';
   return `<div class="table-wrap"><table class="scan-table">
     <thead><tr><th>Status</th><th class="col-pkg">Package</th><th class="col-ver">In use</th><th>Malware versions</th>${fixHead}<th class="col-pub">Published</th></tr></thead>
     <tbody>${body}</tbody>
@@ -4106,14 +4106,14 @@ function scanRender(data) {
   const fixedCves = new Set(withFixes.flatMap(p => p.vexHere.map(vexVulnId)));
   const fixCard = vexCovered ? `<div class="scan-card fix"
       title="Chainguard's builds of these ${withFixes.length} already fix ${fixedCves.size} distinct vulnerabilities — no upgrade needed">
-    <div class="sc-num">${withFixes.length}</div><div class="sc-label">🛡 ${unit} with backported fixes</div></div>` : '';
+    <div class="sc-num">${withFixes.length}</div><div class="sc-label">🛡 ${unit} with backported CVE remediation</div></div>` : '';
 
   const showUpgrades = vexCovered && document.getElementById('scan-show-upgrades').checked;
   const upgradable = packages.filter(p => p.vexNext);
   const upgradeCves = new Set(upgradable.flatMap(p => p.vexNext.vulns.map(vexVulnId)));
   const upTitle = `A patch or minor upgrade of these ${upgradable.length} would pick up ${upgradeCves.size} distinct vulnerability fixes from Chainguard's builds`;
   const upCard = showUpgrades ? `<div class="scan-card upfix" title="${escHtml(upTitle)}">
-    <div class="sc-num">${upgradable.length}</div><div class="sc-label">↑ ${unit} a minor upgrade from fixes</div></div>` : '';
+    <div class="sc-num">${upgradable.length}</div><div class="sc-label">↑ ${unit} a minor upgrade from remediation</div></div>` : '';
 
   const cards = `<div class="scan-summary">
     <div class="scan-card total"><div class="sc-num">${packages.length}</div><div class="sc-label">${unit} scanned</div></div>
@@ -4149,13 +4149,13 @@ function scanBuildPrintHead(findingsOnly) {
     p.status === 'clean' && !p.vexHere?.length && !(showUpgrades && p.vexNext)).length;
 
   const covers = showUpgrades
-    ? 'known malware, malware history, a backported fix for the version in use, or fixes a patch or minor upgrade away'
-    : 'known malware, malware history, or a backported fix for the version in use';
+    ? 'known malware, malware history, backported CVE remediation for the version in use, or remediation a patch or minor upgrade away'
+    : 'known malware, malware history, or backported CVE remediation for the version in use';
   const meta = [
     _scanSourceName ? `Source: ${_scanSourceName}` : null,
     `Generated ${formatDateExact(Date.now())}`,
     findingsOnly
-      ? `Findings: ${(packages.length - quiet).toLocaleString()} of ${packages.length.toLocaleString()} ${unit} — ${covers}. The other ${quiet.toLocaleString()} were clean, with no fix available.`
+      ? `Findings: ${(packages.length - quiet).toLocaleString()} of ${packages.length.toLocaleString()} ${unit} — ${covers}. The other ${quiet.toLocaleString()} ${quiet === 1 ? 'was' : 'were'} clean, with no remediation available.`
       : `All ${packages.length.toLocaleString()} scanned ${unit} listed, including the ${quiet.toLocaleString()} with nothing to report.`,
   ].filter(Boolean);
 
@@ -4163,7 +4163,7 @@ function scanBuildPrintHead(findingsOnly) {
     <h2>Dependency scan — ${escHtml(SCAN_ECO_LABELS[ecosystem] || ecosystem)}</h2>
     <div class="pr-counts">${packages.length.toLocaleString()} ${unit} scanned ·
       ${exact.toLocaleString()} known malware · ${had.toLocaleString()} has had malware ·
-      ${fixes.toLocaleString()} with backported fixes${showUpgrades ? ` · ${upgrades.toLocaleString()} with fixes an upgrade away` : ''}</div>
+      ${fixes.toLocaleString()} with backported CVE remediation${showUpgrades ? ` · ${upgrades.toLocaleString()} with remediation a minor upgrade away` : ''}</div>
     <div class="pr-meta">${meta.map(escHtml).join('<br>')}</div>`;
 }
 
@@ -4192,7 +4192,7 @@ function scanClear() {
   _scanSourceName = null;
   document.getElementById('scan-results').innerHTML = `<div class="status-placeholder">
     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-    Upload a package-lock.json, requirements.txt, or a list of Maven group:artifact:version coordinates to check every dependency against the malware database and for backported CVE fixes
+    Upload a package-lock.json, requirements.txt, or a list of Maven group:artifact:version coordinates to check every dependency against the malware database and for backported CVE remediation
   </div>`;
 }
 
@@ -4269,7 +4269,7 @@ document.getElementById('scan-form').addEventListener('submit', async (e) => {
     // 2) Backported CVE fixes: which pinned versions Chainguard already ships a
     //    patched build of. One bulk lookup; results come back under the names we
     //    sent. The feed covers PyPI and Maven, not npm.
-    progressText.textContent = 'Checking for backported CVE fixes…';
+    progressText.textContent = 'Checking for backported CVE remediation…';
     const vexRes = await fetch('/api/cgr-vex/bulk-check', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -4281,7 +4281,7 @@ document.getElementById('scan-form').addEventListener('submit', async (e) => {
         const fixes = vexRes.results[p.name];
         Object.assign(p, scanVexInfo(fixes, p.version));
         // Computed up front (the feed already sent every version's fixes) so
-        // the "fixes an upgrade away" toggle is a re-render, not a rescan.
+        // the "fixes a minor upgrade away" toggle is a re-render, not a rescan.
         p.vexNext = scanVexUpgrade(ecosystem, fixes, p.version, p.vexHere);
       }
     }
@@ -4310,12 +4310,12 @@ document.getElementById('scan-form').addEventListener('submit', async (e) => {
       notes.push(`<div class="banner warn">Skipped ${parsed.skipped} line${parsed.skipped !== 1 ? 's' : ''} that did not parse as <code>group:artifact:version</code>.</div>`);
     }
     if (datesSkipped > 0) {
-      notes.push(`<div class="banner info">Publish dates cover the first ${SCAN_MAVEN_DATE_CAP} coordinates — ${datesSkipped} more went undated to keep the scan quick. Malware and backported-fix results cover every coordinate.</div>`);
+      notes.push(`<div class="banner info">Publish dates cover the first ${SCAN_MAVEN_DATE_CAP} coordinates — ${datesSkipped} more went undated to keep the scan quick. Malware and remediation results cover every coordinate.</div>`);
     }
     if (!vexCovered) {
-      notes.push(`<div class="banner info">Chainguard's <a href="https://libraries.cgr.dev/openvex/v1/all.json" target="_blank" rel="noopener" style="color:#0369a1;">backported-fix feed</a> covers PyPI and Maven only, so this ${ecoLabel} scan checks malware alone.</div>`);
+      notes.push(`<div class="banner info">Chainguard's <a href="https://libraries.cgr.dev/openvex/v1/all.json" target="_blank" rel="noopener" style="color:#0369a1;">backported CVE remediation feed</a> covers PyPI and Maven only, so this ${ecoLabel} scan checks malware alone.</div>`);
     } else if (vexRes && !vexRes.warm) {
-      notes.push(`<div class="banner warn">The backported-fix mirror is still filling — rerun the scan shortly for complete CVE coverage.</div>`);
+      notes.push(`<div class="banner warn">The backported CVE remediation mirror is still filling — rerun the scan shortly for complete coverage.</div>`);
     }
     banners.innerHTML = notes.join('');
     state.scan = { packages, ecosystem, vexCovered };
@@ -5010,7 +5010,7 @@ document.getElementById('lag-table-prev').addEventListener('click', () => { if (
 document.getElementById('lag-table-next').addEventListener('click', () => { lagTableState.page++; lagLoadTable(); });
 
 
-// ── Backported Fixes (VEX) tab ────────────────────────────────────────────────
+// ── Backported CVE Remediation (VEX) tab ─────────────────────────────────────
 // `month` ('YYYY-MM') is set by clicking a bar in the monthly chart, which
 // switches the chart to daily bars; `day` ('YYYY-MM-DD') is a further click on
 // one of those days. Both narrow the table below.
@@ -5064,7 +5064,7 @@ async function vexLoadTable() {
 
   const el = document.getElementById('vex-results');
   if (res.rows.length === 0) {
-    el.innerHTML = '<div class="mal-empty">No backported fixes match this search.</div>';
+    el.innerHTML = '<div class="mal-empty">No backported CVE remediation matches this search.</div>';
     return;
   }
 
@@ -5141,8 +5141,8 @@ function vexRenderChart() {
   const back = document.getElementById('vex-chart-back');
   back.style.display = dayMode || vexBrowseState.month ? '' : 'none';
   title.textContent = dayMode
-    ? `New backported fixes per day · ${vexFmtMonth(vexBrowseState.month)}`
-    : 'New backported fixes per month (click a bar for a daily view)';
+    ? `New backported CVE remediations per day · ${vexFmtMonth(vexBrowseState.month)}`
+    : 'New backported CVE remediations per month (click a bar for a daily view)';
   if (!points.length) { svg.innerHTML = ''; legend.innerHTML = ''; wrap.style.display = dayMode ? '' : 'none'; return; }
   wrap.style.display = '';
 
