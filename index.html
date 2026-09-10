@@ -707,7 +707,6 @@
     white-space:nowrap; cursor:help;
     background:#f0f9ff; color:#0369a1; border:1px dashed #7dd3fc;
   }
-  .scan-upchip.major { background:#f8fafc; color:#64748b; border-color:#cbd5e1; }
   .scan-up-tag { font-size:0.6rem; font-weight:700; letter-spacing:0.04em; }
   table.scan-table { width:100%; border-collapse:collapse; font-size:0.82rem; }
   table.scan-table th, table.scan-table td { padding:6px 10px; text-align:left; border-bottom:1px solid #f1f5f9; vertical-align:top; }
@@ -1093,7 +1092,7 @@
         <label class="filter-label" id="scan-print-all-label" style="display:none;"
           title="By default the PDF lists only packages with known malware, malware history, or a backported fix available"><input type="checkbox" id="scan-print-all"> Include clean rows</label>
         <label class="filter-label" id="scan-upgrades-label" style="display:none;"
-          title="Also show CVE fixes waiting at a newer version — the smallest upgrade that picks up backported fixes"><input type="checkbox" id="scan-show-upgrades"> Fixes an upgrade away</label>
+          title="Also show CVE fixes waiting at a newer version of the same major — the smallest patch or minor upgrade that picks up backported fixes"><input type="checkbox" id="scan-show-upgrades"> Fixes an upgrade away</label>
         <label class="filter-label" style="margin-left:auto;"><input type="checkbox" id="scan-fetch-dates" checked> Fetch publish dates</label>
       </div>
     </form>
@@ -3822,9 +3821,10 @@ function scanVexInfo(fixes, version) {
 
 // The upgrade that would pick up backported fixes: the cheapest newer version
 // of the same package whose Chainguard build fixes something the version in use
-// doesn't. "Cheapest" is the smallest release-distance class (patch, then minor,
-// then major) and, within it, the newest version — the same upgrade work for the
-// most fixes. Returns null when no newer version carries anything new.
+// doesn't. Only same-major versions count — a major bump is a rewrite, not an
+// upgrade anyone makes for a CVE. "Cheapest" is patch before minor and, within
+// a class, the newest version — the same upgrade work for the most fixes.
+// Returns null when no such version carries anything new.
 function scanVexUpgrade(eco, fixes, version, vexHere) {
   if (!fixes || !fixes.length || !version) return null;
   const here = new Set((vexHere || []).map(vexVulnId));
@@ -3834,6 +3834,7 @@ function scanVexUpgrade(eco, fixes, version, vexHere) {
   for (const f of fixes) {
     const v = f.baseVersion;
     if (!v || scanVerCompare(eco, v, version) <= 0) continue;
+    if (scanVersionDistance(eco, v, version) === 'major') continue;
     const id = vexVulnId(f.vuln);
     if (!id || here.has(id)) continue;
     let e = byVersion.get(v);
@@ -4010,9 +4011,9 @@ function scanMalwareCell(eco, p) {
 // upgrade.
 const SCAN_MAX_FIXCHIPS = 8;
 
-// One chip for the upgrade that would pick up fixes. Dashed blue, or grey when
-// it means crossing a major version.
-const SCAN_UP_LABEL = { patch: 'PATCH', minor: 'MINOR', major: 'MAJOR' };
+// One chip for the upgrade that would pick up fixes — dashed blue, against the
+// solid green of the fixes you already have.
+const SCAN_UP_LABEL = { patch: 'PATCH', minor: 'MINOR' };
 function scanUpgradeChip(p) {
   const up = p.vexNext;
   if (!up) return '';
@@ -4080,7 +4081,7 @@ function scanRenderTable(eco, packages, showFixes, showUpgrades) {
     </tr>`;
   }).join('');
   const fixTip = showUpgrades
-    ? 'Green: CVEs already fixed in Chainguard\'s build of the version you use. Blue: fixes waiting at the nearest newer version.'
+    ? 'Green: CVEs already fixed in Chainguard\'s build of the version you use. Blue: fixes waiting a patch or minor upgrade away.'
     : 'CVEs already fixed in Chainguard\'s build of the version you use';
   const fixHead = showFixes ? `<th title="${escHtml(fixTip)}">Backported fixes</th>` : '';
   return `<div class="table-wrap"><table class="scan-table">
@@ -4107,19 +4108,12 @@ function scanRender(data) {
       title="Chainguard's builds of these ${withFixes.length} already fix ${fixedCves.size} distinct vulnerabilities — no upgrade needed">
     <div class="sc-num">${withFixes.length}</div><div class="sc-label">🛡 ${unit} with backported fixes</div></div>` : '';
 
-  // The upgrade card counts only the ones reachable without a major bump —
-  // that's the actionable set. Anything needing a major jump goes in the title.
   const showUpgrades = vexCovered && document.getElementById('scan-show-upgrades').checked;
   const upgradable = packages.filter(p => p.vexNext);
-  const nearby = upgradable.filter(p => p.vexNext.distance !== 'major');
-  const nearbyCves = new Set(nearby.flatMap(p => p.vexNext.vulns.map(vexVulnId)));
-  const majors = upgradable.length - nearby.length;
-  const upTitle = [
-    `A patch or minor upgrade of these ${nearby.length} would pick up ${nearbyCves.size} distinct vulnerability fixes from Chainguard's builds`,
-    majors ? `${majors} more only after a major-version upgrade` : null,
-  ].filter(Boolean).join('. ');
+  const upgradeCves = new Set(upgradable.flatMap(p => p.vexNext.vulns.map(vexVulnId)));
+  const upTitle = `A patch or minor upgrade of these ${upgradable.length} would pick up ${upgradeCves.size} distinct vulnerability fixes from Chainguard's builds`;
   const upCard = showUpgrades ? `<div class="scan-card upfix" title="${escHtml(upTitle)}">
-    <div class="sc-num">${nearby.length}</div><div class="sc-label">↑ ${unit} a minor upgrade from fixes</div></div>` : '';
+    <div class="sc-num">${upgradable.length}</div><div class="sc-label">↑ ${unit} a minor upgrade from fixes</div></div>` : '';
 
   const cards = `<div class="scan-summary">
     <div class="scan-card total"><div class="sc-num">${packages.length}</div><div class="sc-label">${unit} scanned</div></div>
@@ -4155,7 +4149,7 @@ function scanBuildPrintHead(findingsOnly) {
     p.status === 'clean' && !p.vexHere?.length && !(showUpgrades && p.vexNext)).length;
 
   const covers = showUpgrades
-    ? 'known malware, malware history, a backported fix for the version in use, or fixes waiting at a newer version'
+    ? 'known malware, malware history, a backported fix for the version in use, or fixes a patch or minor upgrade away'
     : 'known malware, malware history, or a backported fix for the version in use';
   const meta = [
     _scanSourceName ? `Source: ${_scanSourceName}` : null,
