@@ -676,6 +676,9 @@
   /* backported fixes — shield blue, not the green of the "clean" card */
   .scan-card.fix     { background:#f0f9ff; border-color:#7dd3fc; }
   .scan-card.fix     .sc-num { color:#0369a1; }
+  /* fixes an upgrade away — same blue, dashed to read as "not yours yet" */
+  .scan-card.upfix   { background:#fff; border-style:dashed; border-color:#7dd3fc; }
+  .scan-card.upfix   .sc-num { color:#0369a1; }
   /* malware-version chips shown inline in the table (wrap within a bounded cell) */
   .scan-mal-cell { display:flex; flex-wrap:wrap; gap:4px; max-width:260px; }
   .scan-vchip {
@@ -696,6 +699,16 @@
     background:#dcfce7; color:#166534; border:1px solid #86efac;
   }
   .scan-fixchip.muted { background:#f8fafc; color:#64748b; border-color:#e2e8f0; }
+  /* upgrade chips — blue and dashed: fixes you'd get by moving version, as
+     opposed to the solid green ones you already have at the version in use */
+  .scan-upchip {
+    font-family:'SFMono-Regular',Consolas,monospace; font-size:0.72rem; padding:1px 6px;
+    border-radius:5px; display:inline-flex; align-items:center; gap:5px;
+    white-space:nowrap; cursor:help;
+    background:#f0f9ff; color:#0369a1; border:1px dashed #7dd3fc;
+  }
+  .scan-upchip.major { background:#f8fafc; color:#64748b; border-color:#cbd5e1; }
+  .scan-up-tag { font-size:0.6rem; font-weight:700; letter-spacing:0.04em; }
   table.scan-table { width:100%; border-collapse:collapse; font-size:0.82rem; }
   table.scan-table th, table.scan-table td { padding:6px 10px; text-align:left; border-bottom:1px solid #f1f5f9; vertical-align:top; }
   table.scan-table th { font-size:0.72rem; text-transform:uppercase; letter-spacing:0.04em; color:#64748b; background:#f8fafc; position:sticky; top:0; }
@@ -1079,6 +1092,8 @@
           title="Opens the print dialog — choose &quot;Save as PDF&quot; as the destination for an A4 report of the packages with findings">Export PDF</button>
         <label class="filter-label" id="scan-print-all-label" style="display:none;"
           title="By default the PDF lists only packages with known malware, malware history, or a backported fix available"><input type="checkbox" id="scan-print-all"> Include clean rows</label>
+        <label class="filter-label" id="scan-upgrades-label" style="display:none;"
+          title="Also show CVE fixes waiting at a newer version — the smallest upgrade that picks up backported fixes"><input type="checkbox" id="scan-show-upgrades"> Fixes an upgrade away</label>
         <label class="filter-label" style="margin-left:auto;"><input type="checkbox" id="scan-fetch-dates" checked> Fetch publish dates</label>
       </div>
     </form>
@@ -3805,6 +3820,43 @@ function scanVexInfo(fixes, version) {
   };
 }
 
+// The upgrade that would pick up backported fixes: the cheapest newer version
+// of the same package whose Chainguard build fixes something the version in use
+// doesn't. "Cheapest" is the smallest release-distance class (patch, then minor,
+// then major) and, within it, the newest version — the same upgrade work for the
+// most fixes. Returns null when no newer version carries anything new.
+function scanVexUpgrade(eco, fixes, version, vexHere) {
+  if (!fixes || !fixes.length || !version) return null;
+  const here = new Set((vexHere || []).map(vexVulnId));
+  // Keyed by upstream base version: that's what a consumer would bump to, not
+  // the cgr build string.
+  const byVersion = new Map();
+  for (const f of fixes) {
+    const v = f.baseVersion;
+    if (!v || scanVerCompare(eco, v, version) <= 0) continue;
+    const id = vexVulnId(f.vuln);
+    if (!id || here.has(id)) continue;
+    let e = byVersion.get(v);
+    if (!e) { e = { version: v, vulns: new Map(), builds: new Set() }; byVersion.set(v, e); }
+    e.vulns.set(id, f.vuln);
+    e.builds.add(f.fullVersion);
+  }
+  if (!byVersion.size) return null;
+  const cands = [...byVersion.values()].map(e => ({
+    version: e.version,
+    distance: scanVersionDistance(eco, e.version, version),
+    vulns: [...e.vulns.values()],
+    builds: [...e.builds],
+  }));
+  cands.sort((a, b) => (SCAN_DIST_RANK[a.distance] - SCAN_DIST_RANK[b.distance])
+    || scanVerCompare(eco, b.version, a.version));
+  const best = cands[0];
+  // A bigger jump can be worth flagging when it fixes strictly more — noted in
+  // the chip's tooltip rather than given a chip of its own.
+  const most = cands.reduce((m, c) => (c.vulns.length > m.vulns.length ? c : m), best);
+  return { ...best, alt: most !== best && most.vulns.length > best.vulns.length ? most : null };
+}
+
 // Maven publishes no bulk "every release with its date" endpoint, so dates come
 // from a HEAD on each version's POM, batched per artifact and only for the
 // versions in use. A GAR export can list thousands of coordinates, so the total
@@ -3957,9 +4009,29 @@ function scanMalwareCell(eco, p) {
 // version in use already fixes, so the vulnerability goes away without an
 // upgrade.
 const SCAN_MAX_FIXCHIPS = 8;
-function scanFixCell(p) {
+
+// One chip for the upgrade that would pick up fixes. Dashed blue, or grey when
+// it means crossing a major version.
+const SCAN_UP_LABEL = { patch: 'PATCH', minor: 'MINOR', major: 'MAJOR' };
+function scanUpgradeChip(p) {
+  const up = p.vexNext;
+  if (!up) return '';
+  const n = up.vulns.length;
+  const ids = up.vulns.map(vexVulnId);
+  const tip = [
+    `Upgrade ${p.version} → ${up.version} (${up.distance} upgrade): Chainguard's build of ${up.version} fixes ${n} more vulnerabilit${n === 1 ? 'y' : 'ies'}`,
+    ...ids.slice(0, 12).map(x => `• ${x}`),
+    ids.length > 12 ? `…and ${ids.length - 12} more` : null,
+    up.builds.length ? `Chainguard build: ${up.builds.join(', ')}` : null,
+    up.alt ? `${up.alt.vulns.length} fixed at ${up.alt.version} (${up.alt.distance} upgrade)` : null,
+  ].filter(Boolean).join('\n');
+  return `<span class="scan-upchip ${up.distance}" title="${escHtml(tip)}">↑ ${escHtml(up.version)} · ${n} fix${n === 1 ? '' : 'es'}<span class="scan-up-tag">${SCAN_UP_LABEL[up.distance]}</span></span>`;
+}
+
+function scanFixCell(p, showUpgrades) {
   const { vexHere = [], vexBuilds = [] } = p;
-  if (!vexHere.length) return '<span style="color:#cbd5e1">—</span>';
+  const upChip = showUpgrades ? scanUpgradeChip(p) : '';
+  if (!vexHere.length) return upChip ? `<div class="scan-fix-cell">${upChip}</div>` : '<span style="color:#cbd5e1">—</span>';
   const buildTip = vexBuilds.length ? `Chainguard build: ${vexBuilds.join(', ')}` : null;
   const chips = vexHere.slice(0, SCAN_MAX_FIXCHIPS).map(v => {
     const tip = [`${vexVulnId(v)} — fixed in Chainguard's build of ${p.version}`, buildTip,
@@ -3970,14 +4042,15 @@ function scanFixCell(p) {
   const more = extra > 0
     ? `<span class="scan-fixchip muted" title="${escHtml(vexHere.slice(SCAN_MAX_FIXCHIPS).map(vexVulnId).join(', '))}">+${extra} more</span>`
     : '';
-  return `<div class="scan-fix-cell">${chips}${more}</div>`;
+  return `<div class="scan-fix-cell">${chips}${more}${upChip}</div>`;
 }
 
-function scanRenderTable(eco, packages, showFixes) {
+function scanRenderTable(eco, packages, showFixes, showUpgrades) {
   const order = { exact: 0, had: 1, clean: 2 };
   // Within a status group, packages with a backported fix for the version in
   // use sort first — otherwise they're lost among hundreds of clean rows.
-  const fixRank = p => (p.vexHere?.length ? 0 : 1);
+  // Rows whose fixes are an upgrade away come next, ahead of the rest.
+  const fixRank = p => (p.vexHere?.length ? 0 : (showUpgrades && p.vexNext ? 1 : 2));
   const rows = packages.slice().sort((a, b) =>
     (order[a.status] - order[b.status]) || (fixRank(a) - fixRank(b))
     || a.name.localeCompare(b.name) || scanVerCompare(eco, a.version, b.version));
@@ -3991,7 +4064,7 @@ function scanRenderTable(eco, packages, showFixes) {
     // version. The PDF export can drop these.
     const rowCls = p.status === 'exact' ? 'row-exact'
       : p.status === 'had' ? 'row-had'
-      : p.vexHere?.length ? '' : 'row-quiet';
+      : (p.vexHere?.length || (showUpgrades && p.vexNext)) ? '' : 'row-quiet';
     const inUse = p.version
       ? escHtml(p.version)
       : (p.spec ? `<span style="color:#94a3b8;" title="No exact == pin — only package-level malware history checked">${escHtml(p.spec)}</span>` : '<span style="color:#cbd5e1">—</span>');
@@ -4002,11 +4075,14 @@ function scanRenderTable(eco, packages, showFixes) {
       <td class="mono col-pkg">${escHtml(p.name)}${p.dev ? ' <span class="scan-status-pill clean">dev</span>' : ''}</td>
       <td class="mono col-ver">${inUse}</td>
       <td>${scanMalwareCell(eco, p)}</td>
-      ${showFixes ? `<td>${scanFixCell(p)}</td>` : ''}
+      ${showFixes ? `<td>${scanFixCell(p, showUpgrades)}</td>` : ''}
       <td class="col-pub">${p.published ? escHtml(formatDateUTC(p.published)) : '<span style="color:#cbd5e1">—</span>'}</td>
     </tr>`;
   }).join('');
-  const fixHead = showFixes ? '<th title="CVEs already fixed in Chainguard\'s build of the version you use">Backported fixes</th>' : '';
+  const fixTip = showUpgrades
+    ? 'Green: CVEs already fixed in Chainguard\'s build of the version you use. Blue: fixes waiting at the nearest newer version.'
+    : 'CVEs already fixed in Chainguard\'s build of the version you use';
+  const fixHead = showFixes ? `<th title="${escHtml(fixTip)}">Backported fixes</th>` : '';
   return `<div class="table-wrap"><table class="scan-table">
     <thead><tr><th>Status</th><th class="col-pkg">Package</th><th class="col-ver">In use</th><th>Malware versions</th>${fixHead}<th class="col-pub">Published</th></tr></thead>
     <tbody>${body}</tbody>
@@ -4031,15 +4107,31 @@ function scanRender(data) {
       title="Chainguard's builds of these ${withFixes.length} already fix ${fixedCves.size} distinct vulnerabilities — no upgrade needed">
     <div class="sc-num">${withFixes.length}</div><div class="sc-label">🛡 ${unit} with backported fixes</div></div>` : '';
 
+  // The upgrade card counts only the ones reachable without a major bump —
+  // that's the actionable set. Anything needing a major jump goes in the title.
+  const showUpgrades = vexCovered && document.getElementById('scan-show-upgrades').checked;
+  const upgradable = packages.filter(p => p.vexNext);
+  const nearby = upgradable.filter(p => p.vexNext.distance !== 'major');
+  const nearbyCves = new Set(nearby.flatMap(p => p.vexNext.vulns.map(vexVulnId)));
+  const majors = upgradable.length - nearby.length;
+  const upTitle = [
+    `A patch or minor upgrade of these ${nearby.length} would pick up ${nearbyCves.size} distinct vulnerability fixes from Chainguard's builds`,
+    majors ? `${majors} more only after a major-version upgrade` : null,
+  ].filter(Boolean).join('. ');
+  const upCard = showUpgrades ? `<div class="scan-card upfix" title="${escHtml(upTitle)}">
+    <div class="sc-num">${nearby.length}</div><div class="sc-label">↑ ${unit} a minor upgrade from fixes</div></div>` : '';
+
   const cards = `<div class="scan-summary">
     <div class="scan-card total"><div class="sc-num">${packages.length}</div><div class="sc-label">${unit} scanned</div></div>
     <div class="scan-card danger"><div class="sc-num">${exact}</div><div class="sc-label">Known malware</div></div>
     <div class="scan-card warn"><div class="sc-num">${had}</div><div class="sc-label">Has had malware</div></div>
     <div class="scan-card ok"><div class="sc-num">${clean}</div><div class="sc-label">Clean</div></div>
     ${fixCard}
+    ${upCard}
   </div>`;
 
-  document.getElementById('scan-results').innerHTML = cards + scanRenderTable(ecosystem, packages, vexCovered);
+  document.getElementById('scan-results').innerHTML =
+    cards + scanRenderTable(ecosystem, packages, vexCovered, showUpgrades);
 }
 
 // Filename when the input came from a file rather than a paste, so a printed
@@ -4054,15 +4146,22 @@ function scanBuildPrintHead(findingsOnly) {
   const exact = packages.filter(p => p.status === 'exact').length;
   const had   = packages.filter(p => p.status === 'had').length;
   const fixes = packages.filter(p => p.vexHere?.length).length;
+  // Upgrade suggestions only reach the PDF when the table is showing them.
+  const showUpgrades = state.scan.vexCovered && document.getElementById('scan-show-upgrades').checked;
+  const upgrades = showUpgrades ? packages.filter(p => p.vexNext).length : 0;
   // A row can be both "had malware" and carry a fix, so count what the print
   // stylesheet actually hides rather than adding the categories up.
-  const quiet = packages.filter(p => p.status === 'clean' && !p.vexHere?.length).length;
+  const quiet = packages.filter(p =>
+    p.status === 'clean' && !p.vexHere?.length && !(showUpgrades && p.vexNext)).length;
 
+  const covers = showUpgrades
+    ? 'known malware, malware history, a backported fix for the version in use, or fixes waiting at a newer version'
+    : 'known malware, malware history, or a backported fix for the version in use';
   const meta = [
     _scanSourceName ? `Source: ${_scanSourceName}` : null,
     `Generated ${formatDateExact(Date.now())}`,
     findingsOnly
-      ? `Findings: ${(packages.length - quiet).toLocaleString()} of ${packages.length.toLocaleString()} ${unit} — known malware, malware history, or a backported fix for the version in use. The other ${quiet.toLocaleString()} were clean, with no fix available for the version in use.`
+      ? `Findings: ${(packages.length - quiet).toLocaleString()} of ${packages.length.toLocaleString()} ${unit} — ${covers}. The other ${quiet.toLocaleString()} were clean, with no fix available.`
       : `All ${packages.length.toLocaleString()} scanned ${unit} listed, including the ${quiet.toLocaleString()} with nothing to report.`,
   ].filter(Boolean);
 
@@ -4070,7 +4169,7 @@ function scanBuildPrintHead(findingsOnly) {
     <h2>Dependency scan — ${escHtml(SCAN_ECO_LABELS[ecosystem] || ecosystem)}</h2>
     <div class="pr-counts">${packages.length.toLocaleString()} ${unit} scanned ·
       ${exact.toLocaleString()} known malware · ${had.toLocaleString()} has had malware ·
-      ${fixes.toLocaleString()} with backported fixes</div>
+      ${fixes.toLocaleString()} with backported fixes${showUpgrades ? ` · ${upgrades.toLocaleString()} with fixes an upgrade away` : ''}</div>
     <div class="pr-meta">${meta.map(escHtml).join('<br>')}</div>`;
 }
 
@@ -4093,6 +4192,7 @@ function scanClear() {
   document.getElementById('scan-pdf-btn').disabled = true;
   document.getElementById('scan-print-all-label').style.display = 'none';
   document.getElementById('scan-print-all').checked = false;
+  document.getElementById('scan-upgrades-label').style.display = 'none';
   document.getElementById('scan-results').classList.remove('print-findings-only');
   state.scan = { packages: null };
   _scanSourceName = null;
@@ -4111,6 +4211,10 @@ function scanLoadFile(file) {
 }
 
 document.getElementById('scan-pdf-btn').addEventListener('click', scanExportPdf);
+// The upgrade data ships with every scan, so the toggle only re-renders.
+document.getElementById('scan-show-upgrades').addEventListener('change', () => {
+  if (state.scan?.packages) scanRender(state.scan);
+});
 document.getElementById('scan-file-input').addEventListener('change', (e) => scanLoadFile(e.target.files[0]));
 {
   const sdz = document.getElementById('scan-drop-zone');
@@ -4179,7 +4283,13 @@ document.getElementById('scan-form').addEventListener('submit', async (e) => {
     }).then(r => r.ok ? r.json() : null).catch(() => null);
     const vexCovered = !!vexRes?.covered;
     if (vexCovered) {
-      for (const p of packages) Object.assign(p, scanVexInfo(vexRes.results[p.name], p.version));
+      for (const p of packages) {
+        const fixes = vexRes.results[p.name];
+        Object.assign(p, scanVexInfo(fixes, p.version));
+        // Computed up front (the feed already sent every version's fixes) so
+        // the "fixes an upgrade away" toggle is a re-render, not a rescan.
+        p.vexNext = scanVexUpgrade(ecosystem, fixes, p.version, p.vexHere);
+      }
     }
 
     // 3) Optionally enrich with publish dates (and PyPI source URLs).
@@ -4218,6 +4328,7 @@ document.getElementById('scan-form').addEventListener('submit', async (e) => {
     scanRender({ packages, ecosystem, vexCovered });
     document.getElementById('scan-pdf-btn').disabled = false;
     document.getElementById('scan-print-all-label').style.display = '';
+    document.getElementById('scan-upgrades-label').style.display = vexCovered ? '' : 'none';
   } catch (err) {
     document.getElementById('scan-results').innerHTML =
       `<div class="status-placeholder">Unexpected error: ${escHtml(err.message)}</div>`;
