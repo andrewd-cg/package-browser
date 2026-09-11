@@ -123,10 +123,11 @@ async function fetchPypiTimestamps(packageName) {
 }
 
 async function fetchMavenTimestamps(packageName) {
-  const slashIdx = packageName.indexOf('/');
-  if (slashIdx < 0) return null;
-  const group = packageName.slice(0, slashIdx);
-  const artifact = packageName.slice(slashIdx + 1);
+  // OSV/Sentinel use group:artifact; some sources use group/artifact.
+  const sepIdx = packageName.includes(':') ? packageName.indexOf(':') : packageName.indexOf('/');
+  if (sepIdx < 0) return null;
+  const group = packageName.slice(0, sepIdx);
+  const artifact = packageName.slice(sepIdx + 1);
   const q = encodeURIComponent(`g:${group} AND a:${artifact}`);
   const res = await fetch(`https://search.maven.org/solrsearch/select?q=${q}&core=gav&rows=200&sort=timestamp+asc&wt=json`);
   if (!res.ok) return null;
@@ -1685,6 +1686,12 @@ Bun.serve({
     if (url.pathname === '/api/cgr-malware/enrich' && req.method === 'POST') {
       if (enrichState.running) {
         return new Response(JSON.stringify({ error: 'Enrichment already in progress', state: enrichState }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+      }
+      // ?retry=1 clears earlier NOT_FOUND/ERROR stamps so those rows are fetched again.
+      if (url.searchParams.get('retry')) {
+        const eco = url.searchParams.get('eco');
+        const sql = `UPDATE malware SET published_at = NULL WHERE published_at IN ('NOT_FOUND','ERROR')` + (eco ? ` AND ecosystem = ?` : '');
+        eco ? db.prepare(sql).run(eco) : db.prepare(sql).run();
       }
       runMalwareEnrich().catch(() => {});
       return new Response(JSON.stringify({ started: true, state: enrichState }), { status: 202, headers: { 'Content-Type': 'application/json' } });
