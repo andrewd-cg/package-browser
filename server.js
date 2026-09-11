@@ -42,7 +42,7 @@ db.exec(`
 db.exec(`
   CREATE TABLE IF NOT EXISTS vex (
     ecosystem    TEXT NOT NULL,   -- 'pypi' | 'maven'
-    package_name TEXT NOT NULL,   -- pypi: normalized name; maven: group:artifact
+    package_name TEXT NOT NULL,   -- pypi: normalized name; maven: group/artifact
     base_version TEXT NOT NULL,   -- upstream version (cgr build suffix stripped)
     full_version TEXT NOT NULL,   -- chainguard build version (from the purl)
     vuln_name    TEXT,            -- advisory id (CGA-…)
@@ -60,6 +60,46 @@ if (!db.prepare(`SELECT 1 FROM pragma_table_info('vex') WHERE name='fixed_at'`).
   db.exec(`ALTER TABLE vex ADD COLUMN fixed_at TEXT`);
 }
 db.exec(`CREATE INDEX IF NOT EXISTS idx_vex_fixed_at ON vex(fixed_at)`);
+
+// Severity per vulnerability, enriched from OSV. Keyed on the vulnerability
+// rather than the vex row: severity is a property of the CVE, and the ~15k vex
+// rows only carry ~170 distinct ids. Keeping it in its own table also means it
+// survives runVexSync()'s `DELETE FROM vex` without a save-and-restore pass.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS cve_severity (
+    vuln_id     TEXT PRIMARY KEY,  -- CVE id, or GHSA when the statement has no CVE
+    severity    TEXT,              -- CRITICAL|HIGH|MEDIUM|LOW|NEGLIGIBLE|UNKNOWN, or NOT_FOUND/ERROR
+    cvss_score  REAL,              -- computed CVSS v3.1 base score; null for v4-only vectors
+    cvss_vector TEXT,
+    source      TEXT,              -- 'ghsa' | 'cve'
+    fetched_at  TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_cve_severity_sev ON cve_severity(severity);
+`);
+
+// GHSA bands use MODERATE where we (and CVSS) say MEDIUM.
+const SEVERITY_BANDS = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'NEGLIGIBLE', 'UNKNOWN'];
+function normSeverityBand(band) {
+  const b = String(band || '').toUpperCase();
+  if (b === 'MODERATE') return 'MEDIUM';
+  return SEVERITY_BANDS.includes(b) ? b : 'UNKNOWN';
+}
+// True only for a band a caller actually named, so an absent `sev` query param is
+// distinguishable from an unrecognized one (which normSeverityBand maps to UNKNOWN).
+function isSeverityBand(raw) {
+  const b = String(raw || '').toUpperCase();
+  return b === 'MODERATE' || SEVERITY_BANDS.includes(b);
+}
+
+// Shared SQL for reading a vex row's band. Severity is keyed on the vulnerability,
+// so it's constant across every row of a (package × vulnerability) group — but
+// SQLite still wants the aggregate form inside a GROUP BY select. Sentinels and
+// ids the enrichment pass hasn't reached collapse to UNKNOWN, so a band filter
+// never hides rows.
+const VEX_SEV_JOIN = `LEFT JOIN cve_severity s ON s.vuln_id = COALESCE(NULLIF(vex.cve, ''), vex.ghsa)`;
+const VEX_SEV_IN = SEVERITY_BANDS.map(b => `'${b}'`).join(',');
+const VEX_SEV_ROW = `CASE WHEN s.severity IN (${VEX_SEV_IN}) THEN s.severity ELSE 'UNKNOWN' END`;
+const VEX_SEV_AGG = `CASE WHEN MAX(s.severity) IN (${VEX_SEV_IN}) THEN MAX(s.severity) ELSE 'UNKNOWN' END`;
 
 // Migration: add published_at column if not present
 {
@@ -526,13 +566,48 @@ function malwareStatus() {
   const vexCves = db.prepare(`SELECT COUNT(DISTINCT cve) AS n FROM vex WHERE cve IS NOT NULL AND cve != ''`).get().n;
   const vexFixes = db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM vex GROUP BY ecosystem, package_name, vuln_name)`).get().n;
   const vexPackages = db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM vex GROUP BY ecosystem, package_name)`).get().n;
+  // A handful of statements carry a GHSA but no CVE, so distinct vulnerabilities
+  // slightly outnumber distinct CVEs. The bands are counted over CVEs alone so
+  // they sum to the `cves` headline they're displayed beside; `vulns` reports the
+  // wider figure. Rows are still banded and filterable either way — only this
+  // summary is CVE-restricted.
+  const vexVulns = db.prepare(`
+    SELECT COUNT(DISTINCT COALESCE(NULLIF(cve, ''), ghsa)) AS n FROM vex
+    WHERE COALESCE(NULLIF(cve, ''), ghsa) IS NOT NULL
+  `).get().n;
+  // Unresolved ids (sentinels, or not yet enriched) fall into UNKNOWN so the
+  // bands always sum to the headline rather than silently dropping rows.
+  const vexSevRows = db.prepare(`
+    SELECT COALESCE(s.severity, 'UNKNOWN') AS severity, COUNT(*) AS n FROM (
+      SELECT DISTINCT cve AS id FROM vex WHERE cve IS NOT NULL AND cve != ''
+    ) v
+    LEFT JOIN cve_severity s ON s.vuln_id = v.id
+    GROUP BY 1
+  `).all();
+  const vexBySeverity = Object.fromEntries(SEVERITY_BANDS.map(b => [b, 0]));
+  for (const r of vexSevRows) vexBySeverity[normSeverityBand(r.severity)] += r.n;
+  const vexSevCounts = db.prepare(`
+    SELECT
+      COUNT(*) AS total,
+      COUNT(CASE WHEN s.severity IS NOT NULL AND s.severity NOT IN ('NOT_FOUND','ERROR') THEN 1 END) AS enriched,
+      COUNT(CASE WHEN s.severity IS NULL THEN 1 END) AS pending,
+      COUNT(CASE WHEN s.severity IN ('NOT_FOUND','ERROR') THEN 1 END) AS unavailable
+    FROM (
+      SELECT DISTINCT COALESCE(NULLIF(cve, ''), ghsa) AS id FROM vex
+      WHERE COALESCE(NULLIF(cve, ''), ghsa) IS NOT NULL
+    ) v
+    LEFT JOIN cve_severity s ON s.vuln_id = v.id
+  `).get();
   const vex = {
     warm: vexWarm,
     cves: vexCves,
+    vulns: vexVulns,
     fixes: vexFixes,
     packages: vexPackages,
     total: vexCounts.reduce((s, r) => s + r.n, 0),
     byEco: Object.fromEntries(vexCounts.map(r => [r.ecosystem, { statements: r.n, packages: r.pkgs }])),
+    bySeverity: vexBySeverity,
+    severity: { ...vexSevCounts, state: { ...vexSevState } },
     lastSyncAt: vexLastSync?.value || null,
   };
   return { total, byEco, lastSyncAt: lastSync?.value || null, sync: { ...syncState }, platformToken: tokenStatus, enrich: { ...enrichCounts, state: { ...enrichState } }, vex };
@@ -1010,6 +1085,9 @@ function scheduleMalwareJobs() {
     setTimeout(async () => {
       await triggerScheduledSync({ full: true });
       await runVexSync(); // refresh the VEX mirror alongside the malware resync
+      // Only the newly-backported vulnerabilities are looked up, so this is a
+      // handful of requests on a normal day.
+      await runVexSeveritySync().catch(err => console.error('[vex] severity sync failed:', err.message));
       scheduleDailyFull();
     }, delay);
   };
@@ -1082,7 +1160,7 @@ function vexIdFor(eco, pkg) {
 }
 
 // id → package_name as stored in the DB. `pypi/aiohttp.openvex.json` → `aiohttp`;
-// `maven/com.h2database:h2.openvex.json` → `com.h2database:h2`.
+// `maven/com.h2database/h2.openvex.json` → `com.h2database/h2`.
 function vexPkgFromId(id) {
   return id.slice(id.indexOf('/') + 1).replace(/\.openvex\.json$/, '');
 }
@@ -1132,15 +1210,20 @@ function dbVexFixesBulk(eco, normNames) {
     const chunk = normNames.slice(i, i + CHUNK);
     const placeholders = chunk.map(() => '?').join(',');
     const rows = db.prepare(`
-      SELECT package_name, base_version, full_version, vuln_name, cve, ghsa, aliases_json, fixed_at
-      FROM vex WHERE ecosystem = ? AND package_name IN (${placeholders})
+      SELECT package_name, base_version, full_version, vuln_name, cve, ghsa, aliases_json, fixed_at,
+             ${VEX_SEV_ROW} AS severity, s.cvss_score, s.cvss_vector
+      FROM vex ${VEX_SEV_JOIN} WHERE ecosystem = ? AND package_name IN (${placeholders})
     `).all(eco, ...chunk);
     for (const r of rows) {
       (results[r.package_name] ||= []).push({
         fullVersion: r.full_version,
         baseVersion: r.base_version,
         fixedAt: r.fixed_at,
-        vuln: { name: r.vuln_name, cve: r.cve, ghsa: r.ghsa, aliases: JSON.parse(r.aliases_json || '[]') },
+        vuln: {
+          name: r.vuln_name, cve: r.cve, ghsa: r.ghsa,
+          aliases: JSON.parse(r.aliases_json || '[]'),
+          severity: r.severity, cvssScore: r.cvss_score, cvssVector: r.cvss_vector,
+        },
       });
     }
   }
@@ -1208,10 +1291,176 @@ async function runVexSync() {
   }
 }
 
+// ── CVE severity enrichment (OSV) ─────────────────────────────────────────────
+// The OpenVEX feed carries vulnerability ids but no severity, so each distinct
+// id is resolved against OSV. GHSA records are asked first: GitHub publishes a
+// pre-computed band that covers ~98% of the feed, including every advisory whose
+// only CVSS vector is v4 (v4 base scoring needs a 270-entry MacroVector table we
+// don't want to carry). The CVE record's v3 vector is the fallback, which takes
+// coverage to 100%.
+const OSV_API_BASE = 'https://api.osv.dev/v1/vulns';
+const vexSevState = { running: false, done: 0, total: 0, failed: 0, error: null, startedAt: null, finishedAt: null };
+
+function bandFromScore(score) {
+  if (score == null) return 'UNKNOWN';
+  if (score >= 9.0) return 'CRITICAL';
+  if (score >= 7.0) return 'HIGH';
+  if (score >= 4.0) return 'MEDIUM';
+  if (score > 0)    return 'LOW';
+  return 'NEGLIGIBLE';
+}
+
+// CVSS v3.x base score. PR is scope-dependent, hence the two tables.
+const CVSS3_W = {
+  AV: { N: 0.85, A: 0.62, L: 0.55, P: 0.2 },
+  AC: { L: 0.77, H: 0.44 },
+  UI: { N: 0.85, R: 0.62 },
+  PR_U: { N: 0.85, L: 0.62, H: 0.27 },
+  PR_C: { N: 0.85, L: 0.68, H: 0.50 },
+  // v3 grades impact H/L/N — the M of CVSS v2 is not a valid value here.
+  CIA: { H: 0.56, L: 0.22, N: 0 },
+};
+
+// Round up to one decimal using the spec's integer arithmetic — plain
+// Math.ceil(x * 10) / 10 misrounds scores that land on a tenth in binary float.
+function cvssRoundUp(x) {
+  const i = Math.round(x * 100000);
+  return i % 10000 === 0 ? i / 100000 : (Math.floor(i / 10000) + 1) / 10;
+}
+
+function cvss3BaseScore(vector) {
+  if (!/^CVSS:3\.\d\//.test(vector || '')) return null;
+  const m = {};
+  for (const part of vector.split('/').slice(1)) {
+    const [k, v] = part.split(':');
+    if (k && v) m[k] = v;
+  }
+  const scopeChanged = m.S === 'C';
+  const av = CVSS3_W.AV[m.AV], ac = CVSS3_W.AC[m.AC], ui = CVSS3_W.UI[m.UI];
+  const pr = (scopeChanged ? CVSS3_W.PR_C : CVSS3_W.PR_U)[m.PR];
+  const c = CVSS3_W.CIA[m.C], i = CVSS3_W.CIA[m.I], a = CVSS3_W.CIA[m.A];
+  if ([av, ac, ui, pr, c, i, a].some(v => v === undefined)) return null;
+
+  const iss = 1 - (1 - c) * (1 - i) * (1 - a);
+  const impact = scopeChanged
+    ? 7.52 * (iss - 0.029) - 3.25 * Math.pow(iss - 0.02, 15)
+    : 6.42 * iss;
+  // C:N/I:N/A:N scores 0.0 under the spec, but in a published advisory it means
+  // the CNA left the vector as a placeholder — report "unscored" rather than a
+  // 0.0 that would sit absurdly beside a HIGH band (e.g. CVE-2024-47874).
+  if (impact <= 0) return null;
+  const exploitability = 8.22 * av * ac * pr * ui;
+  const raw = scopeChanged
+    ? Math.min(1.08 * (impact + exploitability), 10)
+    : Math.min(impact + exploitability, 10);
+  return cvssRoundUp(raw);
+}
+
+async function fetchOsvVuln(id) {
+  const res = await fetch(`${OSV_API_BASE}/${encodeURIComponent(id)}`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+// First CVSS vector on a record, preferring v3 (which we can score) over v4.
+function pickCvssVector(doc) {
+  const list = doc?.severity || [];
+  return (list.find(s => s.type === 'CVSS_V3') || list.find(s => s.score))?.score || null;
+}
+
+// Resolve one vulnerability to { severity, cvss_score, cvss_vector, source }.
+async function resolveSeverity(id, ghsa) {
+  if (ghsa) {
+    const doc = await fetchOsvVuln(ghsa);
+    const band = doc?.database_specific?.severity;
+    if (band) {
+      const vector = pickCvssVector(doc);
+      return { severity: normSeverityBand(band), cvss_score: cvss3BaseScore(vector), cvss_vector: vector, source: 'ghsa' };
+    }
+  }
+  // No GHSA band — fall back to the primary id's own record and score its vector.
+  const doc = await fetchOsvVuln(id);
+  if (!doc) return null;
+  const vector = pickCvssVector(doc);
+  const score = cvss3BaseScore(vector);
+  // A v4-only vector leaves us no score; record the vector so the gap is visible.
+  return { severity: bandFromScore(score), cvss_score: score, cvss_vector: vector, source: 'cve' };
+}
+
+async function runVexSeveritySync() {
+  if (vexSevState.running) throw new Error('Severity enrichment already in progress');
+  vexSevState.running = true;
+  vexSevState.done = 0;
+  vexSevState.total = 0;
+  vexSevState.failed = 0;
+  vexSevState.error = null;
+  vexSevState.startedAt = new Date().toISOString();
+  vexSevState.finishedAt = null;
+
+  try {
+    // The work queue is a query, so the pass is resumable and idempotent: after
+    // the first fill it returns only newly-backported vulnerabilities.
+    const pending = db.prepare(`
+      SELECT v.id AS id, v.ghsa AS ghsa FROM (
+        SELECT COALESCE(NULLIF(cve, ''), ghsa) AS id, MAX(ghsa) AS ghsa
+        FROM vex
+        WHERE COALESCE(NULLIF(cve, ''), ghsa) IS NOT NULL
+        GROUP BY 1
+      ) v
+      LEFT JOIN cve_severity s ON s.vuln_id = v.id
+      WHERE s.vuln_id IS NULL
+    `).all();
+    vexSevState.total = pending.length;
+    if (!pending.length) return;
+
+    const ins = db.prepare(`
+      INSERT OR REPLACE INTO cve_severity (vuln_id, severity, cvss_score, cvss_vector, source, fetched_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+    const CONC = 8;
+    const FETCH_TIMEOUT = 8000;
+    const withTimeout = (p) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), FETCH_TIMEOUT))]);
+
+    for (let i = 0; i < pending.length; i += CONC) {
+      const batch = pending.slice(i, i + CONC);
+      const settled = await Promise.all(batch.map(async ({ id, ghsa }) => {
+        try {
+          // null = OSV has no record for either id; the sentinels keep the row
+          // out of the queue so it isn't refetched on every sync.
+          return { id, row: await withTimeout(resolveSeverity(id, ghsa)) || { severity: 'NOT_FOUND', cvss_score: null, cvss_vector: null, source: null } };
+        } catch {
+          vexSevState.failed++;
+          return { id, row: { severity: 'ERROR', cvss_score: null, cvss_vector: null, source: null } };
+        }
+      }));
+      const now = new Date().toISOString();
+      db.transaction(() => {
+        for (const { id, row } of settled) {
+          ins.run(id, row.severity, row.cvss_score, row.cvss_vector, row.source, now);
+          vexSevState.done++;
+        }
+      })();
+      await new Promise(r => setTimeout(r, 0));
+    }
+    console.log(`[vex] severity resolved for ${vexSevState.done} vulnerabilities (${vexSevState.failed} failed)`);
+  } catch (err) {
+    vexSevState.error = err.message;
+    throw err;
+  } finally {
+    vexSevState.running = false;
+    vexSevState.finishedAt = new Date().toISOString();
+  }
+}
+
 // Warm the VEX mirror on startup (cheap; no platform token needed). Gated on the
 // same flag as the malware auto-sync so both background refreshes disable together.
+// Severity enrichment is chained after it so a failed OSV lookup can't hold up
+// the mirror itself.
 if ((process.env.MALWARE_AUTOSYNC || '').toLowerCase() !== 'off') {
-  runVexSync().catch(err => console.error('[vex] startup sync failed:', err.message));
+  runVexSync()
+    .then(() => runVexSeveritySync())
+    .catch(err => console.error('[vex] startup sync failed:', err.message));
 }
 
 Bun.serve({
@@ -1557,6 +1806,8 @@ Bun.serve({
       // `bucket` narrows to one month ('YYYY-MM') or one day ('YYYY-MM-DD'),
       // matching a histogram drill-down.
       const bucket = url.searchParams.get('bucket') || '';
+      const sevRaw = url.searchParams.get('sev') || '';
+      const sortBySev = url.searchParams.get('sort') === 'severity';
       const limit  = Math.min(parseInt(url.searchParams.get('limit')  || '100', 10) || 100, 500);
       const offset = parseInt(url.searchParams.get('offset') || '0', 10) || 0;
 
@@ -1568,22 +1819,33 @@ Bun.serve({
         const like = `%${q}%`;
         args.push(like, like, like, like, like);
       }
+      // An unenriched or sentinel id reads as UNKNOWN here, matching how the
+      // status endpoint buckets it — so a band filter never hides rows.
+      if (isSeverityBand(sevRaw)) { where.push(`${VEX_SEV_ROW} = ?`); args.push(normSeverityBand(sevRaw)); }
       const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
 
       const total = db.prepare(`
         SELECT COUNT(*) AS n FROM (
-          SELECT 1 FROM vex ${whereSql} GROUP BY ecosystem, package_name, vuln_name, fixed_at
+          SELECT 1 FROM vex ${VEX_SEV_JOIN} ${whereSql} GROUP BY ecosystem, package_name, vuln_name, fixed_at
         )
       `).get(...args).n;
+      // Worst-first, then by score within a band; ties fall back to the default
+      // date ordering so paging stays stable.
+      const orderSql = sortBySev
+        ? `ORDER BY CASE ${VEX_SEV_AGG} ${SEVERITY_BANDS.map((b, i) => `WHEN '${b}' THEN ${i}`).join(' ')} ELSE ${SEVERITY_BANDS.length} END,
+           MAX(s.cvss_score) IS NULL, MAX(s.cvss_score) DESC, fixed_at IS NULL, fixed_at DESC, package_name ASC`
+        : `ORDER BY fixed_at IS NULL, fixed_at DESC, package_name ASC`;
       const rows = db.prepare(`
         SELECT ecosystem, package_name, vuln_name,
                MAX(cve) AS cve, MAX(ghsa) AS ghsa, MAX(aliases_json) AS aliases_json,
                fixed_at,
+               ${VEX_SEV_AGG} AS severity,
+               MAX(s.cvss_score) AS cvss_score, MAX(s.cvss_vector) AS cvss_vector, MAX(s.source) AS sev_source,
                GROUP_CONCAT(DISTINCT base_version) AS base_versions,
                GROUP_CONCAT(DISTINCT full_version) AS full_versions
-        FROM vex ${whereSql}
+        FROM vex ${VEX_SEV_JOIN} ${whereSql}
         GROUP BY ecosystem, package_name, vuln_name, fixed_at
-        ORDER BY fixed_at IS NULL, fixed_at DESC, package_name ASC
+        ${orderSql}
         LIMIT ? OFFSET ?
       `).all(...args, limit, offset);
       const out = rows.map(r => ({
@@ -1594,6 +1856,10 @@ Bun.serve({
         ghsa: r.ghsa,
         aliases: JSON.parse(r.aliases_json || '[]'),
         fixedAt: r.fixed_at,
+        severity: r.severity,
+        cvssScore: r.cvss_score,
+        cvssVector: r.cvss_vector,
+        severitySource: r.sev_source,
         baseVersions: (r.base_versions || '').split(',').filter(Boolean),
         fullVersions: (r.full_versions || '').split(',').filter(Boolean),
       }));
@@ -1607,7 +1873,12 @@ Bun.serve({
       const eco = url.searchParams.get('eco') || '';
       const q   = url.searchParams.get('q')   || '';
       const month = url.searchParams.get('month') || '';
+      const sevRaw = url.searchParams.get('sev') || '';
       const byDay = /^\d{4}-\d{2}$/.test(month);
+      // Stack by ecosystem (default) or by severity band. Only the grouping
+      // column and the pivot's zero-filled keys differ.
+      const bySev = url.searchParams.get('stack') === 'severity';
+      const sevFilter = isSeverityBand(sevRaw);
       const where = ['fixed_at IS NOT NULL'], args = [];
       if (eco) { where.push('ecosystem = ?'); args.push(eco); }
       if (byDay) { where.push('substr(fixed_at, 1, 7) = ?'); args.push(month); }
@@ -1616,24 +1887,42 @@ Bun.serve({
         const like = `%${q}%`;
         args.push(like, like, like, like, like);
       }
+      if (sevFilter) { where.push(`${VEX_SEV_ROW} = ?`); args.push(normSeverityBand(sevRaw)); }
       const whereSql = `WHERE ${where.join(' AND ')}`;
       const bucketExpr = byDay ? 'substr(fixed_at, 1, 10)' : 'substr(fixed_at, 1, 7)';
+      const seriesExpr = bySev ? VEX_SEV_ROW : 'ecosystem';
+      const seriesKeys = bySev ? SEVERITY_BANDS : ['pypi', 'maven'];
       const rows = db.prepare(`
-        SELECT bucket, ecosystem, COUNT(*) AS n FROM (
-          SELECT ${bucketExpr} AS bucket, ecosystem
-          FROM vex ${whereSql}
-          GROUP BY ecosystem, package_name, vuln_name, ${bucketExpr}
-        ) GROUP BY bucket, ecosystem ORDER BY bucket ASC
+        SELECT bucket, series, COUNT(*) AS n FROM (
+          SELECT ${bucketExpr} AS bucket, ${seriesExpr} AS series
+          FROM vex ${bySev || sevFilter ? VEX_SEV_JOIN : ''} ${whereSql}
+          -- ecosystem stays in the dedup key regardless of what we stack by, so
+          -- both stack modes total identically.
+          GROUP BY ecosystem, package_name, vuln_name, ${bucketExpr}, series
+        ) GROUP BY bucket, series ORDER BY bucket ASC
       `).all(...args);
-      // Pivot to one row per month with a per-ecosystem breakdown for stacking.
+      // Pivot to one row per bucket with a per-series breakdown for stacking.
       const byBucket = new Map();
       for (const r of rows) {
         let e = byBucket.get(r.bucket);
-        if (!e) { e = { bucket: r.bucket, pypi: 0, maven: 0 }; byBucket.set(r.bucket, e); }
-        if (r.ecosystem in e) e[r.ecosystem] = r.n;
+        if (!e) { e = { bucket: r.bucket, ...Object.fromEntries(seriesKeys.map(k => [k, 0])) }; byBucket.set(r.bucket, e); }
+        if (r.series in e) e[r.series] = r.n;
       }
       const points = [...byBucket.values()];
-      return new Response(JSON.stringify({ points, granularity: byDay ? 'day' : 'month', month: byDay ? month : null }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ points, stack: bySev ? 'severity' : 'ecosystem', granularity: byDay ? 'day' : 'month', month: byDay ? month : null }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    // CVE severity enrichment for the VEX mirror (fire-and-forget).
+    if (url.pathname === '/api/cgr-vex/severity' && req.method === 'POST') {
+      if (vexSevState.running) {
+        return new Response(JSON.stringify({ error: 'Severity enrichment already in progress', state: vexSevState }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+      }
+      // ?retry=1 drops earlier NOT_FOUND/ERROR rows so those ids are looked up again.
+      if (url.searchParams.get('retry')) {
+        db.prepare(`DELETE FROM cve_severity WHERE severity IN ('NOT_FOUND','ERROR')`).run();
+      }
+      runVexSeveritySync().catch(() => {});
+      return new Response(JSON.stringify({ started: true, state: vexSevState }), { status: 202, headers: { 'Content-Type': 'application/json' } });
     }
 
     // Lightweight client config. `selfManagedAuth` is true when the server runs

@@ -658,6 +658,25 @@
     border: 1px solid #86efac;
     white-space: nowrap;
   }
+  /* ── CVE severity ──────────────────────────────────────────────────────────
+     One palette for every severity surface: the VEX table pills, the header
+     filter chips, and the Dependency Scan fix chips. Charts use the border
+     colour solid instead — the pale backgrounds vanish at legend-swatch size. */
+  .severity-indicator {
+    display:inline-flex; align-items:center; gap:0.25rem;
+    font-size:0.65rem; font-weight:700; padding:1px 7px; border-radius:99px;
+    text-transform:uppercase; letter-spacing:0.03em; white-space:nowrap;
+  }
+  .severity-indicator.critical   { background:#f2e4f8; color:#82349d; border:1px solid #c08ad5; }
+  .severity-indicator.high       { background:#fbe7e8; color:#98362e; border:1px solid #ee7f78; }
+  .severity-indicator.medium     { background:#fcebcc; color:#a1531e; border:1px solid #f3ad56; }
+  .severity-indicator.low        { background:#fefad3; color:#76651d; border:1px solid #f7d959; }
+  .severity-indicator.negligible { background:#e8ecef; color:#4d5b6a; border:1px solid #b8c2ca; }
+  .severity-indicator.unknown    { background:#ffffff; color:#4d5b6a; border:1px solid #b8c2ca; }
+  /* Clickable variants used as header filter chips. */
+  button.severity-indicator { cursor:pointer; font-family:inherit; }
+  button.severity-indicator.off { background:#fff; color:#94a3b8; border-color:#e2e8f0; }
+  .severity-indicator .sev-n { font-weight:800; font-variant-numeric:tabular-nums; }
   /* ── Lockfile Scan ─────────────────────────────────────────────────────── */
   .scan-summary { display:flex; gap:0.75rem; flex-wrap:wrap; margin-bottom:1rem; }
   .scan-card {
@@ -699,6 +718,14 @@
     background:#dcfce7; color:#166534; border:1px solid #86efac;
   }
   .scan-fixchip.muted { background:#f8fafc; color:#64748b; border-color:#e2e8f0; }
+  /* Severity tint overrides the green: which CVEs were remediated matters more
+     than restating "remediated", which the column header already says. */
+  .scan-fixchip.sev-critical   { background:#f2e4f8; color:#82349d; border-color:#c08ad5; }
+  .scan-fixchip.sev-high       { background:#fbe7e8; color:#98362e; border-color:#ee7f78; }
+  .scan-fixchip.sev-medium     { background:#fcebcc; color:#a1531e; border-color:#f3ad56; }
+  .scan-fixchip.sev-low        { background:#fefad3; color:#76651d; border-color:#f7d959; }
+  .scan-fixchip.sev-negligible { background:#e8ecef; color:#4d5b6a; border-color:#b8c2ca; }
+  .scan-fixchip.sev-unknown    { background:#ffffff; color:#4d5b6a; border-color:#b8c2ca; }
   /* upgrade chips — blue and dashed: fixes you'd get by moving version, as
      opposed to the solid green ones you already have at the version in use */
   .scan-upchip {
@@ -1229,6 +1256,7 @@
   <div id="tab-vex" class="tab-pane">
     <div class="mal-bar">
       <span><span class="mal-stat" id="vex-cves">0</span> distinct CVEs fixed across <span class="mal-stat" id="vex-pkgs">0</span> packages · Last sync: <span class="mal-stat" id="vex-last-sync">never</span></span>
+      <span id="vex-sev-chips" style="display:flex; gap:0.3rem; flex-wrap:wrap;"></span>
       <span style="flex:1"></span>
       <span style="font-size:0.82rem;color:#64748b;">Chainguard rebuilds upstream releases with security fixes backported. Source: <a href="https://libraries.cgr.dev/openvex/v1/all.json" target="_blank" rel="noopener" style="color:#3b82f6;">OpenVEX feed</a>.</span>
     </div>
@@ -1250,6 +1278,11 @@
         <span id="vex-chart-title" style="font-size:0.78rem;color:#64748b;">New backported CVE remediations per month</span>
         <button type="button" class="copy-btn" id="vex-chart-back" style="display:none;">← All months</button>
         <span style="flex:1"></span>
+        <span style="font-size:0.72rem;color:#94a3b8;">Stack by</span>
+        <div id="vex-stack-chips" style="display:flex; gap:0.25rem;">
+          <button class="mal-source-chip active" data-stack="ecosystem" style="background:#475569;">Ecosystem</button>
+          <button class="mal-source-chip" data-stack="severity">Severity</button>
+        </div>
         <span id="vex-chart-legend" style="display:flex;gap:0.75rem;font-size:0.72rem;color:#475569;"></span>
       </div>
       <svg id="vex-chart-svg" style="display:block;width:100%;" height="170"></svg>
@@ -1482,6 +1515,59 @@ function malwareBadgeHtml(m) {
 // Preferred public id for a vulnerability: CVE if it has one, else GHSA, else
 // the Chainguard CGA id the feed keys on.
 function vexVulnId(v) { return v.cve || v.ghsa || v.name; }
+
+// ── CVE severity ─────────────────────────────────────────────────────────────
+// Single source of truth for every severity surface: the VEX tab's header chips,
+// table pills and chart, plus the Dependency Scan cards and fix chips.
+// `cls` selects the .severity-indicator / .scan-fixchip.sev-* rules; `color` is
+// the solid fill for chart segments and legend swatches, where the pale CSS
+// backgrounds are too faint to read.
+const VEX_SEV = [
+  { key: 'CRITICAL',   label: 'Critical',   cls: 'critical',   color: '#c08ad5' },
+  { key: 'HIGH',       label: 'High',       cls: 'high',       color: '#ee7f78' },
+  { key: 'MEDIUM',     label: 'Medium',     cls: 'medium',     color: '#f3ad56' },
+  { key: 'LOW',        label: 'Low',        cls: 'low',        color: '#f7d959' },
+  { key: 'NEGLIGIBLE', label: 'Negligible', cls: 'negligible', color: '#b8c2ca' },
+  { key: 'UNKNOWN',    label: 'Unknown',    cls: 'unknown',    color: '#b8c2ca' },
+];
+const VEX_SEV_BY_KEY = Object.fromEntries(VEX_SEV.map(s => [s.key, s]));
+// Anything unrecognized — including a vulnerability the enrichment pass hasn't
+// reached yet — reads as Unknown, matching how the server buckets it.
+function vexSevMeta(key) { return VEX_SEV_BY_KEY[String(key || '').toUpperCase()] || VEX_SEV_BY_KEY.UNKNOWN; }
+
+// Counts keyed by band → [{ ...meta, n }] for the bands that actually have data,
+// worst first. Empty bands are dropped so Negligible and Unknown — which the
+// current feed never produces — don't show as dead chips or legend entries.
+function vexSevPresent(counts) {
+  return VEX_SEV.map(s => ({ ...s, n: counts?.[s.key] || 0 })).filter(s => s.n > 0);
+}
+
+// "1 Critical, 3 High" — for tooltips and the scan card breakdown.
+function vexSevSummary(counts) {
+  return vexSevPresent(counts).map(s => `${s.n} ${s.label}`).join(', ');
+}
+
+// Tally a list of vulnerability objects into { BAND: n }.
+function vexSevCounts(vulns) {
+  const out = {};
+  for (const v of (vulns || [])) {
+    const k = vexSevMeta(v.severity).key;
+    out[k] = (out[k] || 0) + 1;
+  }
+  return out;
+}
+
+// The severity line for a vulnerability tooltip. The band is GitHub's published
+// assessment and the score is computed from whatever CVSS vector the record
+// carries, so the two genuinely disagree sometimes — show both rather than
+// implying the score produced the band.
+function vexSevTipLine(v) {
+  const meta = vexSevMeta(v.severity);
+  const bits = [`Severity: ${meta.label}`];
+  if (v.cvssScore != null) bits.push(`CVSS ${v.cvssScore}`);
+  if (v.cvssVector) bits.push(v.cvssVector);
+  return bits.join(' · ');
+}
 
 function buildVexMap(fixes) {
   const m = new Map();
@@ -4034,14 +4120,19 @@ function scanFixCell(p, showUpgrades) {
   const upChip = showUpgrades ? scanUpgradeChip(p) : '';
   if (!vexHere.length) return upChip ? `<div class="scan-fix-cell">${upChip}</div>` : '<span style="color:#cbd5e1">—</span>';
   const buildTip = vexBuilds.length ? `Chainguard build: ${vexBuilds.join(', ')}` : null;
-  const chips = vexHere.slice(0, SCAN_MAX_FIXCHIPS).map(v => {
-    const tip = [`${vexVulnId(v)} — fixed in Chainguard's build of ${p.version}`, buildTip,
+  // Worst first, so the chips that matter survive the SCAN_MAX_FIXCHIPS cut.
+  const ranked = vexHere.slice().sort((a, b) =>
+    VEX_SEV.findIndex(s => s.key === vexSevMeta(a.severity).key) - VEX_SEV.findIndex(s => s.key === vexSevMeta(b.severity).key)
+    || String(vexVulnId(a)).localeCompare(String(vexVulnId(b))));
+  const chips = ranked.slice(0, SCAN_MAX_FIXCHIPS).map(v => {
+    const tip = [`${vexVulnId(v)} — fixed in Chainguard's build of ${p.version}`, vexSevTipLine(v), buildTip,
       v.aliases?.length > 1 ? `Aliases: ${v.aliases.join(', ')}` : null].filter(Boolean).join('\n');
-    return `<span class="scan-fixchip" title="${escHtml(tip)}">${escHtml(vexVulnId(v))}</span>`;
+    return `<span class="scan-fixchip sev-${vexSevMeta(v.severity).cls}" title="${escHtml(tip)}">${escHtml(vexVulnId(v))}</span>`;
   }).join('');
-  const extra = vexHere.length - SCAN_MAX_FIXCHIPS;
+  const extra = ranked.length - SCAN_MAX_FIXCHIPS;
+  const hidden = ranked.slice(SCAN_MAX_FIXCHIPS);
   const more = extra > 0
-    ? `<span class="scan-fixchip muted" title="${escHtml(vexHere.slice(SCAN_MAX_FIXCHIPS).map(vexVulnId).join(', '))}">+${extra} more</span>`
+    ? `<span class="scan-fixchip muted" title="${escHtml([vexSevSummary(vexSevCounts(hidden)), ...hidden.map(vexVulnId)].filter(Boolean).join('\n'))}">+${extra} more</span>`
     : '';
   return `<div class="scan-fix-cell">${chips}${more}${upChip}</div>`;
 }
@@ -4090,6 +4181,24 @@ function scanRenderTable(eco, packages, showFixes, showUpgrades) {
   </table></div>`;
 }
 
+// Severity tally over DISTINCT vulnerabilities — the same CVE is often backported
+// across several of a lockfile's packages, and the cards count distinct ids.
+function scanSevBreakdown(vulns) {
+  const byId = new Map();
+  for (const v of (vulns || [])) byId.set(vexVulnId(v), v);
+  return vexSevCounts([...byId.values()]);
+}
+
+// The breakdown row inside a summary card. Renders nothing when no band has data,
+// so a scan with no fixes doesn't grow an empty row.
+function scanSevPills(counts) {
+  const bands = vexSevPresent(counts);
+  if (!bands.length) return '';
+  return `<div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:0.45rem;">${
+    bands.map(s => `<span class="severity-indicator ${s.cls}" title="${escHtml(`${s.n} distinct ${s.label} vulnerabilit${s.n === 1 ? 'y' : 'ies'}`)}"><span class="sev-n">${s.n}</span> ${escHtml(s.label)}</span>`).join('')
+  }</div>`;
+}
+
 function scanRender(data) {
   const { packages, ecosystem, vexCovered } = data;
   const exact = packages.filter(p => p.status === 'exact').length;
@@ -4104,16 +4213,20 @@ function scanRender(data) {
   // several of a lockfile's packages.
   const withFixes = packages.filter(p => p.vexHere?.length);
   const fixedCves = new Set(withFixes.flatMap(p => p.vexHere.map(vexVulnId)));
+  const fixedSev = scanSevBreakdown(withFixes.flatMap(p => p.vexHere));
   const fixCard = vexCovered ? `<div class="scan-card fix"
-      title="Chainguard's builds of these ${withFixes.length} already fix ${fixedCves.size} distinct vulnerabilities — no upgrade needed">
-    <div class="sc-num">${withFixes.length}</div><div class="sc-label">🛡 ${unit} with backported CVE remediation</div></div>` : '';
+      title="${escHtml([`Chainguard's builds of these ${withFixes.length} already fix ${fixedCves.size} distinct vulnerabilities — no upgrade needed`, vexSevSummary(fixedSev)].filter(Boolean).join('\n'))}">
+    <div class="sc-num">${withFixes.length}</div><div class="sc-label">🛡 ${unit} with backported CVE remediation</div>
+    ${scanSevPills(fixedSev)}</div>` : '';
 
   const showUpgrades = vexCovered && document.getElementById('scan-show-upgrades').checked;
   const upgradable = packages.filter(p => p.vexNext);
   const upgradeCves = new Set(upgradable.flatMap(p => p.vexNext.vulns.map(vexVulnId)));
-  const upTitle = `A patch or minor upgrade of these ${upgradable.length} would pick up ${upgradeCves.size} distinct vulnerability fixes from Chainguard's builds`;
+  const upgradeSev = scanSevBreakdown(upgradable.flatMap(p => p.vexNext.vulns));
+  const upTitle = [`A patch or minor upgrade of these ${upgradable.length} would pick up ${upgradeCves.size} distinct vulnerability fixes from Chainguard's builds`, vexSevSummary(upgradeSev)].filter(Boolean).join('\n');
   const upCard = showUpgrades ? `<div class="scan-card upfix" title="${escHtml(upTitle)}">
-    <div class="sc-num">${upgradable.length}</div><div class="sc-label">↑ ${unit} a minor upgrade from remediation</div></div>` : '';
+    <div class="sc-num">${upgradable.length}</div><div class="sc-label">↑ ${unit} a minor upgrade from remediation</div>
+    ${scanSevPills(upgradeSev)}</div>` : '';
 
   const cards = `<div class="scan-summary">
     <div class="scan-card total"><div class="sc-num">${packages.length}</div><div class="sc-label">${unit} scanned</div></div>
@@ -4147,6 +4260,9 @@ function scanBuildPrintHead(findingsOnly) {
   // stylesheet actually hides rather than adding the categories up.
   const quiet = packages.filter(p =>
     p.status === 'clean' && !p.vexHere?.length && !(showUpgrades && p.vexNext)).length;
+  // Severity of what was remediated, over distinct CVEs — the headline figure a
+  // printed report is usually reached for.
+  const fixedSev = vexSevSummary(scanSevBreakdown(packages.flatMap(p => p.vexHere || [])));
 
   const covers = showUpgrades
     ? 'known malware, malware history, backported CVE remediation for the version in use, or remediation a patch or minor upgrade away'
@@ -4164,6 +4280,7 @@ function scanBuildPrintHead(findingsOnly) {
     <div class="pr-counts">${packages.length.toLocaleString()} ${unit} scanned ·
       ${exact.toLocaleString()} known malware · ${had.toLocaleString()} has had malware ·
       ${fixes.toLocaleString()} with backported CVE remediation${showUpgrades ? ` · ${upgrades.toLocaleString()} with remediation a minor upgrade away` : ''}</div>
+    ${fixedSev ? `<div class="pr-counts">Remediated by severity: ${escHtml(fixedSev)}</div>` : ''}
     <div class="pr-meta">${meta.map(escHtml).join('<br>')}</div>`;
 }
 
@@ -5014,7 +5131,7 @@ document.getElementById('lag-table-next').addEventListener('click', () => { lagT
 // `month` ('YYYY-MM') is set by clicking a bar in the monthly chart, which
 // switches the chart to daily bars; `day` ('YYYY-MM-DD') is a further click on
 // one of those days. Both narrow the table below.
-const vexBrowseState = { page: 0, pageSize: 100, total: 0, eco: '', month: '', day: '' };
+const vexBrowseState = { page: 0, pageSize: 100, total: 0, eco: '', month: '', day: '', sev: '', sort: '', stack: 'ecosystem' };
 let _vexTimer = null;
 let _vexStatusLoaded = false;
 
@@ -5022,7 +5139,9 @@ const VEX_ECO_LABELS = { pypi: 'PyPI', maven: 'Maven' };
 
 function vexPkgLink(pkg, eco) {
   if (eco === 'pypi') return `https://pypi.org/project/${encodeURIComponent(pkg)}/`;
-  if (eco === 'maven') { const [g, a] = pkg.split(':'); return `https://central.sonatype.com/artifact/${encodeURIComponent(g || pkg)}/${encodeURIComponent(a || '')}`; }
+  // The vex table stores maven names as `group/artifact` (the feed's doc-id form),
+  // but callers elsewhere write `group:artifact` — accept either separator.
+  if (eco === 'maven') { const [g, a] = pkg.split(/[/:]/); return `https://central.sonatype.com/artifact/${encodeURIComponent(g || pkg)}/${encodeURIComponent(a || '')}`; }
   return '#';
 }
 function vexAdvisoryLink(id) {
@@ -5037,10 +5156,47 @@ async function vexLoadStatus() {
     const v = s.vex || {};
     const cves = document.getElementById('vex-cves');
     cves.textContent = (v.cves || 0).toLocaleString();
-    cves.title = `${(v.fixes || 0).toLocaleString()} package × vulnerability fixes in total`;
+    const cveTip = [`${(v.fixes || 0).toLocaleString()} package × vulnerability fixes in total`];
+    // A few statements carry only a GHSA, so vulnerabilities outnumber CVEs. The
+    // severity chips count CVEs so they sum to the headline beside them.
+    if (v.vulns > v.cves) cveTip.push(`${v.vulns.toLocaleString()} distinct vulnerabilities including ${(v.vulns - v.cves).toLocaleString()} with no CVE id`);
+    cves.title = cveTip.join('\n');
     document.getElementById('vex-pkgs').textContent = (v.packages || 0).toLocaleString();
     document.getElementById('vex-last-sync').textContent = v.lastSyncAt ? formatDateUTC(v.lastSyncAt) : 'never';
+    vexRenderSevChips(v);
   } catch { /* leave defaults */ }
+}
+
+// Severity chips double as filters. While the enrichment pass is still running
+// the counts would read as "everything is Unknown", so say so instead.
+function vexRenderSevChips(v) {
+  const el = document.getElementById('vex-sev-chips');
+  if (!el) return;
+  const pending = v.severity?.pending || 0;
+  const bands = vexSevPresent(v.bySeverity);
+  if (pending && !bands.length) {
+    el.innerHTML = `<span style="font-size:0.78rem;color:#94a3b8;">Resolving severity for ${pending.toLocaleString()} CVEs…</span>`;
+    return;
+  }
+  if (!bands.length) { el.innerHTML = ''; return; }
+  const chips = bands.map(s => {
+    const active = vexBrowseState.sev === s.key;
+    const off = vexBrowseState.sev && !active ? ' off' : '';
+    const tip = active ? `Showing ${s.label} only — click to clear` : `Show ${s.label} only`;
+    return `<button type="button" class="severity-indicator ${s.cls}${off}" data-sev="${s.key}" title="${escHtml(tip)}"><span class="sev-n">${s.n.toLocaleString()}</span> ${escHtml(s.label)}</button>`;
+  });
+  // Unresolved CVEs aren't in any band; flag them rather than quietly undercounting.
+  const note = pending ? `<span style="font-size:0.72rem;color:#94a3b8;" title="Severity enrichment is still running">+${pending.toLocaleString()} pending</span>` : '';
+  el.innerHTML = chips.join('') + note;
+  for (const b of el.querySelectorAll('button[data-sev]')) {
+    b.addEventListener('click', () => {
+      vexBrowseState.sev = vexBrowseState.sev === b.dataset.sev ? '' : b.dataset.sev;
+      vexBrowseState.page = 0;
+      vexRenderSevChips(v);
+      vexLoadTable();
+      vexLoadChart();
+    });
+  }
 }
 
 async function vexLoadTable() {
@@ -5050,6 +5206,8 @@ async function vexLoadTable() {
   if (vexBrowseState.eco) p.set('eco', vexBrowseState.eco);
   const bucket = vexBrowseState.day || vexBrowseState.month;
   if (bucket) p.set('bucket', bucket);
+  if (vexBrowseState.sev) p.set('sev', vexBrowseState.sev);
+  if (vexBrowseState.sort) p.set('sort', vexBrowseState.sort);
   p.set('limit', vexBrowseState.pageSize);
   p.set('offset', vexBrowseState.page * vexBrowseState.pageSize);
 
@@ -5068,10 +5226,16 @@ async function vexLoadTable() {
     return;
   }
 
+  // Clicking the header toggles between worst-first and the default newest-first.
+  const sevSorted = vexBrowseState.sort === 'severity';
+  const sevHead = `<th id="vex-sev-head" style="cursor:pointer;white-space:nowrap;" title="${escHtml(sevSorted ? 'Sorted worst-first — click for newest-first' : 'Click to sort worst-first')}">Severity ${sevSorted ? '▼' : '<span style="color:#cbd5e1">⇅</span>'}</th>`;
   el.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Fixed (UTC)</th><th>Ecosystem</th><th>Package</th><th>Vulnerability</th><th>Fixed in (Chainguard build)</th></tr></thead>
+    <thead><tr><th>Fixed (UTC)</th><th>Ecosystem</th><th>Package</th><th>Vulnerability</th>${sevHead}<th>Fixed in (Chainguard build)</th></tr></thead>
     <tbody>${res.rows.map(r => {
       const primary = r.cve || r.ghsa || r.vuln || '—';
+      const sev = vexSevMeta(r.severity);
+      const sevTip = [vexSevTipLine(r), r.severitySource === 'ghsa' ? 'Band published by GitHub Security Advisories' : r.severitySource === 'cve' ? 'Band derived from the CVE record\'s CVSS vector' : 'Not yet resolved'].filter(Boolean).join('\n');
+      const sevCell = `<span class="severity-indicator ${sev.cls}" data-tip="${escHtml(sevTip)}" style="cursor:help;">${escHtml(sev.label)}</span>`;
       const link = vexAdvisoryLink(primary);
       const vulnCell = link
         ? `<a href="${escHtml(link)}" target="_blank" rel="noopener" style="font-family:monospace;font-size:0.8rem;">${escHtml(primary)}</a>`
@@ -5086,10 +5250,17 @@ async function vexLoadTable() {
         <td style="font-size:0.78rem;">${escHtml(VEX_ECO_LABELS[r.ecosystem] || r.ecosystem)}</td>
         <td><a href="${escHtml(vexPkgLink(r.package, r.ecosystem))}" target="_blank" rel="noopener" style="font-family:monospace;font-size:0.8rem;">${escHtml(r.package)}</a></td>
         <td>${vulnCell}${aliasTip}</td>
+        <td>${sevCell}</td>
         <td style="font-family:monospace;font-size:0.76rem;">${vShown}${vMore}</td>
       </tr>`;
     }).join('')}
     </tbody></table></div>`;
+
+  document.getElementById('vex-sev-head')?.addEventListener('click', () => {
+    vexBrowseState.sort = sevSorted ? '' : 'severity';
+    vexBrowseState.page = 0;
+    vexLoadTable();
+  });
 }
 
 let _vexChart = { points: [], granularity: 'month' };
@@ -5100,8 +5271,14 @@ async function vexLoadChart() {
   if (q) p.set('q', q);
   if (vexBrowseState.eco) p.set('eco', vexBrowseState.eco);
   if (vexBrowseState.month) p.set('month', vexBrowseState.month);
+  if (vexBrowseState.sev) p.set('sev', vexBrowseState.sev);
+  if (vexBrowseState.stack === 'severity') p.set('stack', 'severity');
   const res = await fetch(`/api/cgr-vex/histogram?${p}`).then(r => r.json()).catch(() => ({ points: [] }));
-  _vexChart = { points: res.points || [], granularity: res.granularity === 'day' ? 'day' : 'month' };
+  _vexChart = {
+    points: res.points || [],
+    granularity: res.granularity === 'day' ? 'day' : 'month',
+    stack: res.stack === 'severity' ? 'severity' : 'ecosystem',
+  };
   vexRenderChart();
 }
 
@@ -5134,6 +5311,9 @@ function vexDaysOfMonth(month) {
 function vexRenderChart() {
   const { points, granularity } = _vexChart;
   const dayMode = granularity === 'day';
+  // Both stack modes are just an ordered {key,label,color} list, so everything
+  // below is written against `series` rather than the two ecosystems.
+  const series = _vexChart.stack === 'severity' ? VEX_SEV : VEX_CHART_ECOS;
   const wrap = document.getElementById('vex-chart-wrap');
   const svg = document.getElementById('vex-chart-svg');
   const legend = document.getElementById('vex-chart-legend');
@@ -5160,24 +5340,27 @@ function vexRenderChart() {
   })();
   const months = keys.map(key => {
     const p = byBucket.get(key);
-    return { bucket: key, pypi: p?.pypi || 0, maven: p?.maven || 0 };
+    return { bucket: key, ...Object.fromEntries(series.map(s => [s.key, p?.[s.key] || 0])) };
   });
 
-  // Only legend/stack the ecosystems that actually have data (respects the chip filter).
-  const ecos = VEX_CHART_ECOS.filter(e => months.some(d => d[e.key] > 0));
+  // Only legend/stack the series that actually have data — respects the chip
+  // filters, and keeps the severity bands the feed never produces (Negligible,
+  // Unknown) out of the legend.
+  const ecos = series.filter(e => months.some(d => d[e.key] > 0));
   legend.innerHTML = ecos.map(e => `<span style="display:inline-flex;align-items:center;gap:0.3rem;"><span style="width:10px;height:10px;border-radius:2px;background:${e.color};display:inline-block;"></span>${e.label}</span>`).join('');
 
   const H = 170, padL = 34, padR = 8, padT = 10, padB = 24;
   const W = Math.max(320, Math.round(svg.clientWidth || wrap.clientWidth || 900));
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   const plotW = W - padL - padR, plotH = H - padT - padB;
-  const max = Math.max(...months.map(d => d.pypi + d.maven), 1);
+  const stackTotal = d => ecos.reduce((s, e) => s + d[e.key], 0);
+  const max = Math.max(...months.map(stackTotal), 1);
   const bw = plotW / months.length;
   const scale = n => (n / max) * plotH;
   const labelEvery = Math.ceil(months.length / 12); // keep x labels legible
 
   const bars = months.map((d, i) => {
-    const total = d.pypi + d.maven;
+    const total = stackTotal(d);
     const x = padL + i * bw + (bw - Math.max(1, bw * 0.7)) / 2;
     const barW = Math.max(1, bw * 0.7);
     const label = vexFmtBucket(d.bucket);
@@ -5264,6 +5447,19 @@ document.getElementById('vex-eco-chips').addEventListener('click', (e) => {
     b.style.background = on ? '#475569' : '';
   });
   vexScheduleTable(true);
+});
+// Restacking only changes how the same bars are split, so it keeps any month
+// drill-down rather than resetting the view like a filter change does.
+document.getElementById('vex-stack-chips').addEventListener('click', (e) => {
+  const btn = e.target.closest('.mal-source-chip');
+  if (!btn) return;
+  vexBrowseState.stack = btn.dataset.stack;
+  document.querySelectorAll('#vex-stack-chips .mal-source-chip').forEach(b => {
+    const on = b === btn;
+    b.classList.toggle('active', on);
+    b.style.background = on ? '#475569' : '';
+  });
+  vexLoadChart();
 });
 
 // Load on first tab switch.
