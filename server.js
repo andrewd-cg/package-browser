@@ -122,23 +122,42 @@ async function fetchPypiTimestamps(packageName) {
   return out;
 }
 
-async function fetchMavenTimestamps(packageName) {
+// Publish times come from the POM's Last-Modified on repo1 rather than the
+// solrsearch API, which is rate-limited, slow enough to blow the fetch timeout,
+// and lags the CDN for freshly published artifacts.
+const MAVEN_BASE = 'https://repo1.maven.org/maven2';
+
+function mavenCoords(packageName) {
   // OSV/Sentinel use group:artifact; some sources use group/artifact.
   const sepIdx = packageName.includes(':') ? packageName.indexOf(':') : packageName.indexOf('/');
   if (sepIdx < 0) return null;
-  const group = packageName.slice(0, sepIdx);
-  const artifact = packageName.slice(sepIdx + 1);
-  const q = encodeURIComponent(`g:${group} AND a:${artifact}`);
-  const res = await fetch(`https://search.maven.org/solrsearch/select?q=${q}&core=gav&rows=200&sort=timestamp+asc&wt=json`);
-  if (!res.ok) return null;
-  const data = await res.json();
-  const docs = data.response?.docs || [];
+  return { group: packageName.slice(0, sepIdx).replace(/\./g, '/'), artifact: packageName.slice(sepIdx + 1) };
+}
+
+async function fetchMavenPomDate(groupPath, artifact, version) {
+  const res = await fetch(`${MAVEN_BASE}/${groupPath}/${artifact}/${version}/${artifact}-${version}.pom`, { method: 'HEAD' });
+  const lastMod = res.ok ? res.headers.get('last-modified') : null; // 404s still carry a Last-Modified
+  return lastMod ? new Date(lastMod).toISOString() : null;
+}
+
+async function fetchMavenTimestamps(packageName, versions) {
+  const coords = mavenCoords(packageName);
+  if (!coords) return null;
+  const { group, artifact } = coords;
+
   const out = {};
-  for (const doc of docs) {
-    if (doc.v && doc.timestamp) out[doc.v] = new Date(doc.timestamp).toISOString();
+  for (const version of versions) {
+    if (!version) continue;
+    const ts = await fetchMavenPomDate(group, artifact, version);
+    if (ts) out[version] = ts;
   }
-  const times = Object.values(out).sort();
-  out[''] = times[0] || null;
+
+  // Package-wide block: date it from the oldest version Central still lists.
+  if (versions.includes('')) {
+    const res = await fetch(`${MAVEN_BASE}/${group}/${artifact}/maven-metadata.xml`);
+    const oldest = res.ok ? (await res.text()).match(/<version>([^<]+)<\/version>/)?.[1] : null;
+    if (oldest) out[''] = await fetchMavenPomDate(group, artifact, oldest);
+  }
   return out;
 }
 
@@ -170,18 +189,18 @@ async function runMalwareEnrich() {
     for (let i = 0; i < pending.length; i += BATCH) {
       const batch = pending.slice(i, i + BATCH);
       await Promise.allSettled(batch.map(async ({ ecosystem, package_name }) => {
+        const versions = db.prepare(
+          `SELECT version FROM malware WHERE ecosystem = ? AND package_name = ? AND published_at IS NULL`
+        ).all(ecosystem, package_name).map(r => r.version);
+
         try {
           let timeMap;
           if (ecosystem === 'npm')        timeMap = await withTimeout(fetchNpmTimestamps(package_name));
           else if (ecosystem === 'PyPI')  timeMap = await withTimeout(fetchPypiTimestamps(package_name));
-          else                            timeMap = await withTimeout(fetchMavenTimestamps(package_name));
-
-          const versions = db.prepare(
-            `SELECT version FROM malware WHERE ecosystem = ? AND package_name = ? AND published_at IS NULL`
-          ).all(ecosystem, package_name);
+          else                            timeMap = await withTimeout(fetchMavenTimestamps(package_name, versions));
 
           db.transaction(() => {
-            for (const { version } of versions) {
+            for (const version of versions) {
               updateStmt.run(timeMap?.[version] ?? 'NOT_FOUND', ecosystem, package_name, version);
             }
           })();
