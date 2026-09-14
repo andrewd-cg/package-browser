@@ -1102,10 +1102,14 @@ const STATS_TTL = 30000; // 30 seconds
 // Public feed: an index (all.json) listing per-package OpenVEX docs. Each doc
 // carries `fixed` statements — a statement means Chainguard's build of that
 // version (the purl carries the +cgr.N / -N.cgr.N build) backports a fix for the
-// referenced vulnerability. Only pypi + maven are published today. Persisted to
-// the `vex` table, refreshed daily with the malware mirror; a lookup while the
-// table is cold falls back to a live per-package fetch (same as malware).
+// referenced vulnerability. Persisted to the `vex` table, refreshed daily with
+// the malware mirror; a lookup while the table is cold falls back to a live
+// per-package fetch (same as malware).
 const VEX_BASE = 'https://libraries.cgr.dev/openvex/v1';
+// Ecosystems the feed publishes. It started as pypi + maven and gained npm in
+// August 2026, so this is one list rather than a condition repeated per call
+// site — the next addition should only need this line and a UI chip.
+const VEX_ECOSYSTEMS = ['pypi', 'maven', 'npm'];
 const VEX_INDEX_TTL_MS = 60 * 60 * 1000; // 1h — only used for the cold/live path
 let vexIndexCache = { ids: null, fetchedAt: 0 }; // Set<string> of entry ids
 let vexWarm = db.prepare(`SELECT COUNT(*) AS n FROM vex`).get().n > 0;
@@ -1144,13 +1148,17 @@ function vexBaseVersion(v) {
 }
 
 // Package name in the form the feed — and the `vex` table — uses: PEP 503 for
-// pypi, `group/artifact` for maven. null for any other ecosystem (the feed
-// publishes pypi and maven only). Maven doc ids are `maven/<group>/<artifact>`,
-// so the stored name keeps that slash even though coordinates are written
+// pypi, `group/artifact` for maven, verbatim for npm. null for any ecosystem the
+// feed doesn't publish. Maven doc ids are `maven/<group>/<artifact>`, so the
+// stored name keeps that slash even though coordinates are written
 // `group:artifact`; callers may pass either separator.
+// npm is deliberately not case-folded: the sync stores whatever the doc id says
+// and only this function normalizes lookups, so folding here would desync the
+// two for any package the registry let through with an uppercase letter.
 function vexNormPkg(eco, pkg) {
   if (eco === 'pypi')  return pkg.toLowerCase().replace(/[-_.]+/g, '-');
   if (eco === 'maven') return pkg.replace(':', '/');
+  if (eco === 'npm')   return pkg;
   return null;
 }
 
@@ -1256,7 +1264,7 @@ async function runVexSync() {
   try {
     vexIndexCache = { ids: null, fetchedAt: 0 }; // force a fresh index for the rebuild
     const ids = await vexIndex();
-    const entries = [...ids].filter(id => id.startsWith('pypi/') || id.startsWith('maven/'));
+    const entries = [...ids].filter(id => VEX_ECOSYSTEMS.some(e => id.startsWith(`${e}/`)));
     const rows = [];
     const CONC = 8;
     for (let i = 0; i < entries.length; i += CONC) {
@@ -1772,10 +1780,10 @@ Bun.serve({
     // Bulk backported-fix lookup for a list of package names (Dependency Scan
     // tab). Results come back keyed by the names the caller sent, so nothing
     // has to reproduce the feed's normalization client-side. `covered` is false
-    // for ecosystems the feed doesn't publish (npm).
+    // for any ecosystem the feed doesn't publish.
     if (url.pathname === '/api/cgr-vex/bulk-check' && req.method === 'POST') {
       const body = await req.json().catch(() => ({}));
-      const eco = body.ecosystem === 'pypi' || body.ecosystem === 'maven' ? body.ecosystem : null;
+      const eco = VEX_ECOSYSTEMS.includes(body.ecosystem) ? body.ecosystem : null;
       const json = (o) => new Response(JSON.stringify(o), { headers: { 'Content-Type': 'application/json' } });
       if (!eco) return json({ ecosystem: body.ecosystem || null, covered: false, warm: vexWarm, results: {} });
       // The whole feed is a ~500-doc rebuild, so warming the mirror beats a
@@ -1891,7 +1899,7 @@ Bun.serve({
       const whereSql = `WHERE ${where.join(' AND ')}`;
       const bucketExpr = byDay ? 'substr(fixed_at, 1, 10)' : 'substr(fixed_at, 1, 7)';
       const seriesExpr = bySev ? VEX_SEV_ROW : 'ecosystem';
-      const seriesKeys = bySev ? SEVERITY_BANDS : ['pypi', 'maven'];
+      const seriesKeys = bySev ? SEVERITY_BANDS : VEX_ECOSYSTEMS;
       const rows = db.prepare(`
         SELECT bucket, series, COUNT(*) AS n FROM (
           SELECT ${bucketExpr} AS bucket, ${seriesExpr} AS series
