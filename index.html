@@ -1024,6 +1024,7 @@
       <label class="filter-label"><input type="checkbox" id="pypi-show-all"> Show all versions</label>
       <label class="filter-label"><input type="checkbox" id="pypi-show-prerelease"> Show pre-release (a / b / rc / dev / post)</label>
       <label class="filter-label"><input type="checkbox" id="pypi-show-malware" checked> Show malware</label>
+      <label class="filter-label"><input type="checkbox" id="pypi-show-provenance"> Show provenance &amp; signed badges</label>
       <label class="filter-label"><input type="checkbox" id="pypi-show-vex"> Show backported CVE remediation</label>
       <label class="filter-label"><input type="checkbox" id="pypi-only-vex"> Only backported CVE remediation</label>
     </div>
@@ -1360,6 +1361,7 @@ const SORT_COLS = {
     published: { cmp: (a, b) => (Date.parse(a.published) || 0) - (Date.parse(b.published) || 0), defaultDir: -1 },
     pypiUrl:   { cmp: (a, b) => (!!a.pypiUrl) - (!!b.pypiUrl),                             defaultDir: -1 },
     cgrType:   { cmp: (a, b) => ((a.cgrPlatforms?.wheelCount || 0) > 0 ? 1 : 0) - ((b.cgrPlatforms?.wheelCount || 0) > 0 ? 1 : 0), defaultDir: -1 },
+    cgrBuiltAt:{ cmp: (a, b) => (Date.parse(a.cgrBuiltAt) || 0) - (Date.parse(b.cgrBuiltAt) || 0), defaultDir: -1 },
   },
   bulk: {
     pkg:        { cmp: (a, b) => a.pkg.localeCompare(b.pkg),                               defaultDir:  1 },
@@ -2334,6 +2336,11 @@ function provBadgeHtml(result) {
     const tip = `SLSA provenance — source commit${result.shortSha ? ` ${result.shortSha}` : ''}`;
     const label = result.shortSha ? `Source ${result.shortSha}` : 'Source';
     parts += `<a class="badge-prov" href="${escHtml(result.commitUrl)}" target="_blank" rel="noopener" title="${escHtml(tip)}">${label}</a>`;
+  } else if (result.publisherRepo) {
+    // PyPI's publish attestation pins no commit, only the workflow that
+    // uploaded the file — link the repo so the badge still goes somewhere.
+    const tip = `Published from ${result.publisherRepo}${result.publisherWorkflow ? ` (${result.publisherWorkflow})` : ''}`;
+    parts += `<a class="badge-prov" href="https://github.com/${escHtml(result.publisherRepo)}" target="_blank" rel="noopener" title="${escHtml(tip)}">Source</a>`;
   } else {
     parts += `<span class="badge-prov no-link" title="SLSA attestation present (no source link)">Source</span>`;
   }
@@ -2925,12 +2932,15 @@ function parseCgrSimpleIndex(html) {
   function accFor(version, type, url) {
     let v = raw.get(version);
     if (!v) { v = { built: null, mirror: null }; raw.set(version, v); }
-    if (!v[type]) v[type] = { url, pythons: new Set(), abis: new Set(), platforms: new Set(), hasSdist: false, wheelCount: 0, wheelFilenames: [], wheels: [] };
+    if (!v[type]) v[type] = { url, pythons: new Set(), abis: new Set(), platforms: new Set(), hasSdist: false, wheelCount: 0, wheelFilenames: [], wheels: [], provWheel: null, provSdist: null };
     return v[type];
   }
 
   for (const a of doc.querySelectorAll('a[href]')) {
     const href = a.getAttribute('href') || '';
+    // PEP 740 provenance, one URL per file. Only built-from-source files carry
+    // it — the upstream mirror links have no data-provenance attribute.
+    const prov = a.getAttribute('data-provenance') || null;
     const filename = decodeURIComponent(href.split('/').pop().split('#')[0]);
     if (!filename) continue;
 
@@ -2951,6 +2961,7 @@ function parseCgrSimpleIndex(html) {
       platform.split('.').forEach(p => e.platforms.add(p));
       e.wheelCount += 1;
       if (e.wheelFilenames.length < 50) e.wheelFilenames.push(filename);
+      if (!e.provWheel) e.provWheel = prov;
       // Per-wheel tuples for "is there a wheel matching cp312 AND musllinux x86_64?" queries.
       for (const py of python.split('.')) {
         for (const pl of platform.split('.')) {
@@ -2967,6 +2978,7 @@ function parseCgrSimpleIndex(html) {
       const version = parts.slice(vi).join('-');
       const e = accFor(version, type, url);
       e.hasSdist = true;
+      if (!e.provSdist) e.provSdist = prov;
     }
   }
 
@@ -2982,7 +2994,10 @@ function parseCgrSimpleIndex(html) {
       const { os, arch } = classifyPlatform(p);
       e.osArchs.add(arch ? `${os}/${arch}` : os);
     }
-    versionMap.set(version, { type, ...e });
+    // A wheel's provenance describes the same build as the sdist's, so either
+    // answers "was this version built and signed" — prefer the wheel, which is
+    // what most installs actually resolve to.
+    versionMap.set(version, { type, ...e, provUrl: e.provWheel || e.provSdist });
   }
   return versionMap;
 }
@@ -2994,16 +3009,22 @@ async function pypiLookup(pkg) {
   const cgrUrl  = `/api/cgr-python/simple/${encodeURIComponent(pkg)}/`;
   const cgrHeaders = user ? { 'x-cgr-user': user, 'x-cgr-pass': pass } : {};
 
-  const [pypiRes, cgrRes, malRes, vexRes] = await Promise.allSettled([
+  // The catalog call rides along in the same fan-out: it costs one request and
+  // no extra round trips, and only overtakes pypi.org as the slowest leg for
+  // packages with thousands of versions.
+  const [pypiRes, cgrRes, malRes, vexRes, catRes] = await Promise.allSettled([
     fetch(pypiUrl).then(r => { if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.status = r.status; throw e; } return r.json(); }),
     fetch(cgrUrl, { headers: cgrHeaders }).then(r => { if (!r.ok) { const e = new Error(`HTTP ${r.status}`); e.status = r.status; throw e; } return r.text(); }),
     fetch(`/api/cgr-malware/check?package=${encodeURIComponent(pkg)}&eco=pypi`).then(r => r.json()),
     fetch(`/api/cgr-vex?eco=pypi&package=${encodeURIComponent(pkg)}`).then(r => r.json()),
+    fetch(`/api/cgr-python-catalog?package=${encodeURIComponent(pkg)}`).then(r => r.json()),
   ]);
 
   const pypiData = pypiRes.status === 'fulfilled' ? pypiRes.value : null;
   const cgrHtml  = cgrRes.status  === 'fulfilled' ? cgrRes.value  : null;
   const vexMap   = buildVexMap(vexRes.status === 'fulfilled' ? (vexRes.value.fixes || []) : []);
+  const catalog  = catRes.status  === 'fulfilled' ? catRes.value  : { error: catRes.reason?.message || 'request failed' };
+  const builtAt  = catalog.versions || {};
 
   const malRows = malRes.status === 'fulfilled' ? (malRes.value.rows || []) : [];
   const malCooldown = malRes.status === 'fulfilled' ? (malRes.value.cooldown || {}) : {};
@@ -3027,6 +3048,9 @@ async function pypiLookup(pkg) {
     rows: sorted.map(v => {
       const files = pypiReleases[v] || [];
       const uploadTime = files[0]?.upload_time || null;
+      // One representative file for the PEP 740 lookup — attestations are
+      // per-file, and a wheel is what most installs resolve to.
+      const attFile = (files.find(f => f.packagetype === 'bdist_wheel') || files[0])?.filename || null;
       const vPypiUrl = files.length > 0 ? `https://pypi.org/project/${encodeURIComponent(pkg)}/${encodeURIComponent(v)}/` : null;
       const cgrInfo = cgrVersionMap.get(v);
       return {
@@ -3049,10 +3073,16 @@ async function pypiLookup(pkg) {
         malware: malByVersion.get(v) || (malPackageWide[0] ? { ...malPackageWide[0], _packageWide: true } : null),
         cooldownUntil: malCooldown[v] || null,
         vex: vexMap.get(v) || null,
+        cgrBuiltAt: builtAt[v]?.builtAt || null,
+        cgrCatalogUpdatedAt: builtAt[v]?.updatedAt || null,
+        cgrProvUrl: cgrInfo?.provUrl || null,
+        pypiFile: attFile,
       };
     }),
     pypiError: pypiRes.status === 'rejected' ? pypiRes.reason : null,
     cgrError:  cgrRes.status  === 'rejected' ? cgrRes.reason  : null,
+    catalogAuthRequired: catalog.authRequired === true,
+    catalogError: catalog.error || null,
     malwarePackageWide: malPackageWide,
   };
 }
@@ -3065,7 +3095,7 @@ function pypiApplyFilters(rows) {
   return out;
 }
 
-function pypiRenderBanners(pypiError, cgrError, pkg) {
+function pypiRenderBanners(pypiError, cgrError, pkg, catalogAuthRequired, catalogError) {
   const container = document.getElementById('pypi-banners');
   container.innerHTML = '';
   if (pypiError) {
@@ -3083,6 +3113,50 @@ function pypiRenderBanners(pypiError, cgrError, pkg) {
       : `libraries.cgr.dev: ${cgrError.message}`;
     container.appendChild(b);
   }
+  // Build dates come from the console-api catalog, a different credential than
+  // the registry above — so it fails independently and gets its own banner.
+  if (catalogAuthRequired || catalogError) {
+    const b = document.createElement('div');
+    b.className = 'banner warn';
+    b.textContent = catalogAuthRequired
+      ? 'Chainguard build dates need a platform token — set one in Settings.'
+      : `Libraries catalog: ${catalogError}`;
+    container.appendChild(b);
+  }
+}
+
+// When Chainguard built a version. Two sources, and they can disagree by
+// months: the Libraries catalog's `createdAt` is when the entry was written
+// (the whole catalog was backfilled in May 2026), while the SLSA provenance
+// carries the builder's own `finishedOn`. The provenance wins when the
+// attestation has been fetched; until then the catalog date stands in, and the
+// tooltip always says which one is on screen.
+function pypiBuiltCellBody(row, prov) {
+  const signed = prov?.buildFinishedOn || null;
+  const ts = signed || row.cgrBuiltAt;
+  if (!ts || isNaN(new Date(ts))) return '<span style="color:#cbd5e1">—</span>';
+  return `${escHtml(formatDateUTC(ts))}<span class="date-utc">${escHtml(timeFmtUTC(ts))}${signed ? ' · signed' : ''}</span>`;
+}
+
+function pypiBuiltTip(row, prov) {
+  const lines = [];
+  if (prov?.buildFinishedOn) {
+    lines.push(`Build finished ${formatDateExact(prov.buildFinishedOn)}`);
+    if (prov.buildStartedOn) lines.push(`Build started  ${formatDateExact(prov.buildStartedOn)}`);
+    lines.push('From the signed SLSA provenance — the builder\'s own clock.');
+    if (row.cgrBuiltAt) lines.push('', `Catalog entry created ${formatDateExact(row.cgrBuiltAt)}`);
+  } else if (row.cgrBuiltAt) {
+    lines.push(`Entered the Chainguard Libraries catalog ${formatDateExact(row.cgrBuiltAt)}`);
+    lines.push('Catalog timestamp, not the builder\'s — tick "Show provenance" for the signed build time.');
+  }
+  if (row.cgrCatalogUpdatedAt) lines.push(`Catalog entry last updated ${formatDateExact(row.cgrCatalogUpdatedAt)}`);
+  return lines.join('\n');
+}
+
+function pypiBuiltCell(row, idx, prov) {
+  const has = (prov?.buildFinishedOn || row.cgrBuiltAt) && !isNaN(new Date(prov?.buildFinishedOn || row.cgrBuiltAt));
+  const tip = has ? ` style="cursor:help" data-tip="${escHtml(pypiBuiltTip(row, prov))}"` : '';
+  return `<td class="date-cell" id="pypi-built-${idx}"${tip}>${pypiBuiltCellBody(row, prov)}</td>`;
 }
 
 function pypiPlatformsCell(p) {
@@ -3157,24 +3231,35 @@ function pypiRenderTable(data) {
       </div>
     </div>
     <div class="table-wrap"><table>
-      <thead><tr>${sortableTh('pypi','version','Version')}${sortableTh('pypi','published','Published')}${sortableTh('pypi','pypiUrl','PyPI','text-align:center')}${sortableTh('pypi','cgrType','Chainguard','text-align:center')}<th>CGR built from source platforms</th></tr></thead>
+      <thead><tr>${sortableTh('pypi','version','Version')}${sortableTh('pypi','published','Published')}${sortableTh('pypi','pypiUrl','PyPI','text-align:center')}${sortableTh('pypi','cgrType','Chainguard','text-align:center')}${sortableTh('pypi','cgrBuiltAt','CGR built')}<th>CGR built from source platforms</th></tr></thead>
       <tbody>`;
 
   const showMalware = document.getElementById('pypi-show-malware').checked;
   const showVex = document.getElementById('pypi-show-vex').checked || document.getElementById('pypi-only-vex').checked;
-  for (const row of rows) {
+  const showProv = document.getElementById('pypi-show-provenance').checked;
+  for (const [idx, row] of rows.entries()) {
     const isLatest = row.version === latest;
     html += `<tr${isLatest ? ' class="latest"' : ''}>`;
     html += `<td><div class="version-cell"><code>${escHtml(row.version)}</code>${isLatest ? '<span class="badge-latest">latest</span>' : ''}${showMalware ? malwareBadgeHtml(row.malware) : ''}${showVex ? vexBadgeHtml(row.vex) : ''}</div></td>`;
     html += publishedCell(row.published);
-    html += `<td class="check-cell">${checkCell(row.pypiUrl)}</td>`;
     const covered = hasCgrWheel(row);
-    html += `<td class="check-cell">${cgrCheckCell(covered ? row.cgrType : null, covered ? row.cgrTarball : null, 'pypi')}${covered ? '' : cooldownBadgeHtml('pypi', row.published, row.cooldownUntil)}</td>`;
+    const pypiBody = checkCell(row.pypiUrl);
+    const cgrBody = `${cgrCheckCell(covered ? row.cgrType : null, covered ? row.cgrTarball : null, 'pypi')}${covered ? '' : cooldownBadgeHtml('pypi', row.published, row.cooldownUntil)}`;
+    if (showProv) {
+      html += `<td class="check-cell check-cell-left"><div class="check-and-prov">${pypiBody}<span id="pypi-att-${idx}"></span></div></td>`;
+      html += `<td class="check-cell check-cell-left"><div class="check-and-prov">${cgrBody}<span id="pypi-cgr-att-${idx}"></span></div></td>`;
+    } else {
+      html += `<td class="check-cell">${pypiBody}</td>`;
+      html += `<td class="check-cell">${cgrBody}</td>`;
+    }
+    html += pypiBuiltCell(row, idx, row.provResult?.cgr);
     html += `<td>${pypiPlatformsCell(row.cgrPlatforms)}</td>`;
     html += `</tr>`;
   }
   html += `</tbody></table></div>`;
   el.innerHTML = html;
+
+  if (showProv) pypiEnrichWithAttestations(name, rows);
 
   state.pypi.lastSnapshot = { name, countNote, total, pypiCount, cgrCount, cgrPct, cgrBuilt, builtPct, cgrMirror, mirrorPct, rows, latest };
 }
@@ -3190,16 +3275,58 @@ function pypiCopyResults() {
   ];
   const vw = Math.max(7, ...rows.map(r => r.version.length + (r.version === latest ? 9 : 0))) + 2;
   const dw = Math.max(9, ...rows.map(r => r.published ? formatDateUTC(r.published).length : 0)) + 2;
-  lines.push('Version'.padEnd(vw) + 'Published'.padEnd(dw) + 'PyPI'.padEnd(10) + 'Chainguard');
-  lines.push('─'.repeat(vw + dw + 20));
+  const builtOf = r => r.provResult?.cgr?.buildFinishedOn || r.cgrBuiltAt || null;
+  const bw = Math.max(9, ...rows.map(r => builtOf(r) ? formatDateUTC(builtOf(r)).length : 0)) + 2;
+  lines.push('Version'.padEnd(vw) + 'Published'.padEnd(dw) + 'PyPI'.padEnd(10) + 'Chainguard'.padEnd(22) + 'CGR built');
+  lines.push('─'.repeat(vw + dw + 32 + bw));
   for (const row of rows) {
     const covered = (row.cgrPlatforms?.wheelCount || 0) > 0;
     const cgrLabel = !covered ? (row.cgrPlatforms?.hasSdist ? '✗ (sdist only)' : '✗') : row.cgrType === 'built' ? '✓ Built from Source' : '✓ Scanned Upstream';
-    lines.push((row.version + (row.version === latest ? ' (latest)' : '')).padEnd(vw) + (row.published ? formatDateUTC(row.published) : '—').padEnd(dw) + (row.pypiUrl ? '✓' : '✗').padEnd(10) + cgrLabel);
+    lines.push((row.version + (row.version === latest ? ' (latest)' : '')).padEnd(vw) + (row.published ? formatDateUTC(row.published) : '—').padEnd(dw) + (row.pypiUrl ? '✓' : '✗').padEnd(10) + cgrLabel.padEnd(22) + (builtOf(row) ? formatDateUTC(builtOf(row)) : '—'));
   }
   copyToClipboard(lines.join('\n'), document.getElementById('pypi-copy-btn'));
 }
 
+// Provenance is fetched per file and each document runs tens of KB, so the
+// badges are opt-in and the requests go a few at a time. Rows with neither a
+// Chainguard-built file (no data-provenance link) nor a PyPI file have nothing
+// to check and are skipped.
+async function pypiEnrichWithAttestations(name, rows) {
+  const { user, pass } = getCreds('pypi');
+  const headers = user ? { 'x-cgr-user': user, 'x-cgr-pass': pass } : {};
+  const paint = (row, idx, result) => {
+    const pypiSlot = document.getElementById(`pypi-att-${idx}`);
+    const cgrSlot  = document.getElementById(`pypi-cgr-att-${idx}`);
+    if (pypiSlot) pypiSlot.innerHTML = provBadgeHtml(result.pypi);
+    if (cgrSlot)  cgrSlot.innerHTML  = provBadgeHtml(result.cgr);
+    // Trade the catalog date for the builder's own timestamp now that it's known.
+    const builtCell = document.getElementById(`pypi-built-${idx}`);
+    if (builtCell && result.cgr?.buildFinishedOn) {
+      builtCell.innerHTML = pypiBuiltCellBody(row, result.cgr);
+      builtCell.dataset.tip = pypiBuiltTip(row, result.cgr);
+      builtCell.style.cursor = 'help';
+    }
+  };
+
+  const targets = rows.map((row, idx) => ({ row, idx })).filter(({ row }) => row.cgrProvUrl || row.pypiFile);
+  await runWithConcurrency(targets, 5, async ({ row, idx }) => {
+    // Kept on the row so sorting or filtering repaints from memory instead of
+    // refetching every provenance document.
+    if (row.provResult) { paint(row, idx, row.provResult); return; }
+    const params = new URLSearchParams({ pkg: name, version: row.version });
+    if (row.cgrProvUrl) params.set('cgrProv', row.cgrProvUrl);
+    if (row.pypiFile) params.set('pypiFile', row.pypiFile);
+    let result;
+    try {
+      result = await fetch(`/api/verify-pypi-attestation?${params}`, { headers }).then(r => r.ok ? r.json() : null);
+    } catch { result = null; }
+    if (!result) return;
+    row.provResult = result;
+    paint(row, idx, result);
+  });
+}
+
+document.getElementById('pypi-show-provenance').addEventListener('change', () => { if (state.pypi.lastData) pypiRenderTable(state.pypi.lastData); });
 document.getElementById('pypi-show-all').addEventListener('change', () => { if (state.pypi.lastData) pypiRenderTable(state.pypi.lastData); });
 document.getElementById('pypi-show-prerelease').addEventListener('change', () => { if (state.pypi.lastData) pypiRenderTable(state.pypi.lastData); });
 document.getElementById('pypi-show-malware').addEventListener('change', () => { if (state.pypi.lastData) pypiRenderTable(state.pypi.lastData); });
@@ -3217,7 +3344,7 @@ document.getElementById('pypi-form').addEventListener('submit', async (e) => {
   try {
     const data = await pypiLookup(pkg);
     state.pypi.lastData = data;
-    pypiRenderBanners(data.pypiError, data.cgrError, pkg);
+    pypiRenderBanners(data.pypiError, data.cgrError, pkg, data.catalogAuthRequired, data.catalogError);
     pypiRenderTable(data);
   } catch (err) {
     document.getElementById('pypi-results').innerHTML = `<div class="status-placeholder">Unexpected error: ${escHtml(err.message)}</div>`;

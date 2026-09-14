@@ -658,6 +658,47 @@ async function consoleApiGet(path, params, ctx = '') {
   }
 }
 
+// ── Libraries catalog ───────────────────────────────────────────────────────
+// The catalog is the authoritative built-from-source set: every entry is
+// SOURCE_TYPE_INTERNAL, so presence means Chainguard built that version.
+// `createdAt` is when the entry was written and `updatedAt` when it last
+// changed; for anything built since the catalog was backfilled in May 2026
+// createdAt lands within seconds of the real build, but older entries all read
+// as May 2026. The signed build time lives in the SLSA provenance instead (see
+// the attestations section below). There is no per-version route (it 404s), so
+// the whole version list is the smallest request we can make; a boto3-scale
+// package runs ~680 KB over 2000 versions, hence the cache — the same package
+// gets looked up repeatedly in a session, and both the Maven and PyPI tabs hit
+// this path.
+const pep503 = name => name.toLowerCase().replace(/[-_.]+/g, '-');
+const CATALOG_TTL = 10 * 60 * 1000;
+const CATALOG_CACHE_MAX = 100;
+const catalogCache = new Map(); // artifact id → { at, items }
+
+async function librariesCatalogVersions(id) {
+  const hit = catalogCache.get(id);
+  if (hit && Date.now() - hit.at < CATALOG_TTL) return hit.items;
+  const items = [];
+  let pageToken = '';
+  for (let i = 0; i < 50; i++) { // safety cap against a runaway paging loop
+    const params = new URLSearchParams({ page_size: '1000' });
+    if (pageToken) params.set('page_token', pageToken);
+    let data;
+    try {
+      data = await consoleApiGet(`/libraries/v1/artifacts/${encodeURIComponent(id)}/versions`, params, `catalog ${id}`);
+    } catch (err) {
+      if (/HTTP 404/.test(err.message)) break; // not in the catalog → nothing built
+      throw err;
+    }
+    for (const it of (data.items || [])) if (it.version) items.push(it);
+    pageToken = data.nextPageToken || data.next_page_token || '';
+    if (!pageToken) break;
+  }
+  if (catalogCache.size >= CATALOG_CACHE_MAX) catalogCache.delete(catalogCache.keys().next().value);
+  catalogCache.set(id, { at: Date.now(), items });
+  return items;
+}
+
 // ── Libraries cooldown policy ───────────────────────────────────────────────
 // Chainguard withholds package versions younger than a per-ecosystem "cooldown"
 // window, measuring age to midnight UTC rather than the live clock: a version is
@@ -1156,7 +1197,7 @@ function vexBaseVersion(v) {
 // and only this function normalizes lookups, so folding here would desync the
 // two for any package the registry let through with an uppercase letter.
 function vexNormPkg(eco, pkg) {
-  if (eco === 'pypi')  return pkg.toLowerCase().replace(/[-_.]+/g, '-');
+  if (eco === 'pypi')  return pep503(pkg);
   if (eco === 'maven') return pkg.replace(':', '/');
   if (eco === 'npm')   return pkg;
   return null;
@@ -1471,6 +1512,96 @@ if ((process.env.MALWARE_AUTOSYNC || '').toLowerCase() !== 'off') {
     .catch(err => console.error('[vex] startup sync failed:', err.message));
 }
 
+// ── Attestations ────────────────────────────────────────────────────────────
+// Shared by the npm route (Sigstore bundles from the npm attestations API) and
+// the PyPI route (PEP 740 envelopes). The two formats nest the same pieces at
+// different paths, so the callers dig out cert/payload/signature and these
+// helpers do the verification and the source-commit extraction.
+
+// The signature covers the DSSE PAE encoding of the payload, not the payload
+// itself, and the signing certificate must chain from Sigstore. Returns the
+// signer identity from the certificate's SAN once both hold.
+function verifySigstoreDsse(certB64, payloadB64, sigB64, payloadType) {
+  try {
+    if (!certB64 || !payloadB64 || !sigB64 || !payloadType) return { verified: false, identity: null };
+    const certDer = Buffer.from(certB64, 'base64');
+    const pemCert = '-----BEGIN CERTIFICATE-----\n' + certDer.toString('base64').match(/.{1,64}/g).join('\n') + '\n-----END CERTIFICATE-----\n';
+    const pubKey = createPublicKey({ key: pemCert, format: 'pem' });
+    const x509 = new X509Certificate(certDer);
+    const payloadBuf = Buffer.from(payloadB64, 'base64');
+    const pae = Buffer.concat([
+      Buffer.from(`DSSEv1 ${payloadType.length} ${payloadType} ${payloadBuf.length} `),
+      payloadBuf,
+    ]);
+    if (!cryptoVerify('SHA256', pae, pubKey, Buffer.from(sigB64, 'base64'))) return { verified: false, identity: null };
+    if (!x509.issuer?.includes('sigstore')) return { verified: false, identity: null };
+    const uriMatch = (x509.subjectAltName || '').match(/URI:([^\s,]+)/);
+    return { verified: true, identity: uriMatch ? uriMatch[1] : null };
+  } catch {
+    return { verified: false, identity: null };
+  }
+}
+
+function extractCommitFromPayload(payload, predicateType) {
+  let commit = null, uri = null;
+  if (predicateType === 'https://slsa.dev/provenance/v1') {
+    const deps = payload.predicate?.buildDefinition?.resolvedDependencies ?? [];
+    for (const dep of deps) {
+      if (dep?.digest?.gitCommit && dep?.uri) { commit = dep.digest.gitCommit; uri = dep.uri; break; }
+    }
+  } else if (predicateType === 'https://slsa.dev/provenance/v0.2') {
+    const src = payload.predicate?.invocation?.configSource ?? payload.predicate?.materials?.[0];
+    commit = src?.digest?.sha1 ?? src?.digest?.gitCommit ?? null;
+    uri = src?.uri ?? null;
+  }
+  if (!commit || !uri) return { commitUrl: null, shortSha: null };
+  let repoUrl = null;
+  const purlMatch = uri.match(/^pkg:github\/([^@]+)/);
+  if (purlMatch) {
+    repoUrl = `https://github.com/${purlMatch[1]}`;
+  } else {
+    const candidate = uri.replace(/^git\+/, '').replace(/@.*$/, '');
+    if (/^https:\/\/(github|gitlab|bitbucket)\.com\//.test(candidate)) repoUrl = candidate;
+  }
+  return repoUrl
+    ? { commitUrl: `${repoUrl}/commit/${commit}`, shortSha: commit.slice(0, 7) }
+    : { commitUrl: null, shortSha: null };
+}
+
+// PEP 740 provenance: one or more attestation bundles, each with a publisher
+// and DSSE-style envelopes whose payload type is fixed at in-toto. Chainguard
+// signs a full SLSA v1 provenance (so there is a source commit and a real
+// build time); pypi.org's own publish attestation has a null predicate and
+// only identifies the publishing workflow.
+function processPep740(data) {
+  for (const bundle of (data?.attestation_bundles || [])) {
+    for (const att of (bundle.attestations || [])) {
+      let statement;
+      try { statement = JSON.parse(Buffer.from(att.envelope.statement, 'base64').toString()); } catch { continue; }
+      const { verified, identity } = verifySigstoreDsse(
+        att.verification_material?.certificate, att.envelope.statement, att.envelope.signature,
+        'application/vnd.in-toto+json',
+      );
+      const { commitUrl, shortSha } = extractCommitFromPayload(statement, statement.predicateType);
+      const meta = statement.predicate?.runDetails?.metadata || {};
+      return {
+        hasAttestation: true,
+        verified,
+        commitUrl,
+        shortSha,
+        identity,
+        tlogIndex: verified ? (att.verification_material?.transparency_entries?.[0]?.logIndex ?? null) : null,
+        predicateType: statement.predicateType || null,
+        buildStartedOn: meta.startedOn || null,
+        buildFinishedOn: meta.finishedOn || null,
+        publisherRepo: bundle.publisher?.repository || null,
+        publisherWorkflow: bundle.publisher?.workflow || null,
+      };
+    }
+  }
+  return { hasAttestation: false };
+}
+
 Bun.serve({
   port: Number(process.env.PORT) || 3000,
   idleTimeout: 60,
@@ -1553,32 +1684,6 @@ Bun.serve({
       const cgrAuthHeaders = await cgrHeaders(req);
       const pkgVer = `${pkg}@${version}`;
 
-      function extractCommitFromPayload(payload, predicateType) {
-        let commit = null, uri = null;
-        if (predicateType === 'https://slsa.dev/provenance/v1') {
-          const deps = payload.predicate?.buildDefinition?.resolvedDependencies ?? [];
-          for (const dep of deps) {
-            if (dep?.digest?.gitCommit && dep?.uri) { commit = dep.digest.gitCommit; uri = dep.uri; break; }
-          }
-        } else if (predicateType === 'https://slsa.dev/provenance/v0.2') {
-          const src = payload.predicate?.invocation?.configSource ?? payload.predicate?.materials?.[0];
-          commit = src?.digest?.sha1 ?? src?.digest?.gitCommit ?? null;
-          uri = src?.uri ?? null;
-        }
-        if (!commit || !uri) return { commitUrl: null, shortSha: null };
-        let repoUrl = null;
-        const purlMatch = uri.match(/^pkg:github\/([^@]+)/);
-        if (purlMatch) {
-          repoUrl = `https://github.com/${purlMatch[1]}`;
-        } else {
-          const candidate = uri.replace(/^git\+/, '').replace(/@.*$/, '');
-          if (/^https:\/\/(github|gitlab|bitbucket)\.com\//.test(candidate)) repoUrl = candidate;
-        }
-        return repoUrl
-          ? { commitUrl: `${repoUrl}/commit/${commit}`, shortSha: commit.slice(0, 7) }
-          : { commitUrl: null, shortSha: null };
-      }
-
       async function processAttestations(data) {
         if (!data?.attestations?.length) return { hasAttestation: false };
         const SLSA_TYPES = new Set(['https://slsa.dev/provenance/v1', 'https://slsa.dev/provenance/v0.2']);
@@ -1591,31 +1696,11 @@ Bun.serve({
             ({ commitUrl, shortSha } = extractCommitFromPayload(payload, att.predicateType));
           } catch {}
 
-          let verified = false, identity = null, tlogIndex = null;
-          try {
-            const certBytes = att.bundle.verificationMaterial?.certificate?.rawBytes
-              ?? att.bundle.verificationMaterial?.x509CertificateChain?.certificates?.[0]?.rawBytes;
-            if (certBytes) {
-              const certDer = Buffer.from(certBytes, 'base64');
-              const pemCert = '-----BEGIN CERTIFICATE-----\n' + certDer.toString('base64').match(/.{1,64}/g).join('\n') + '\n-----END CERTIFICATE-----\n';
-              const pubKey = createPublicKey({ key: pemCert, format: 'pem' });
-              const x509 = new X509Certificate(certDer);
-              const dsse = att.bundle.dsseEnvelope;
-              const payloadBuf = Buffer.from(dsse.payload, 'base64');
-              const pae = Buffer.concat([
-                Buffer.from(`DSSEv1 ${dsse.payloadType.length} ${dsse.payloadType} ${payloadBuf.length} `),
-                payloadBuf,
-              ]);
-              const sigBuf = Buffer.from(dsse.signatures[0].sig, 'base64');
-              if (cryptoVerify('SHA256', pae, pubKey, sigBuf) && x509.issuer?.includes('sigstore')) {
-                verified = true;
-                const san = x509.subjectAltName || '';
-                const uriMatch = san.match(/URI:([^\s,]+)/);
-                identity = uriMatch ? uriMatch[1] : null;
-                tlogIndex = att.bundle.verificationMaterial?.tlogEntries?.[0]?.logIndex ?? null;
-              }
-            }
-          } catch {}
+          const dsse = att.bundle.dsseEnvelope;
+          const certBytes = att.bundle.verificationMaterial?.certificate?.rawBytes
+            ?? att.bundle.verificationMaterial?.x509CertificateChain?.certificates?.[0]?.rawBytes;
+          const { verified, identity } = verifySigstoreDsse(certBytes, dsse?.payload, dsse?.signatures?.[0]?.sig, dsse?.payloadType);
+          const tlogIndex = verified ? (att.bundle.verificationMaterial?.tlogEntries?.[0]?.logIndex ?? null) : null;
 
           return { hasAttestation: true, verified, commitUrl, shortSha, identity, tlogIndex };
         }
@@ -1636,6 +1721,37 @@ Bun.serve({
           processAttestations(cgrRes.status === 'fulfilled' ? cgrRes.value : null),
         ]);
         return new Response(JSON.stringify({ npm: npmResult, cgr: cgrResult }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ error: err.message }), { status: 502, headers: { 'Content-Type': 'application/json' } });
+      }
+    }
+
+    // PEP 740 attestation verification for one Python distribution file.
+    // Chainguard links a provenance URL per built file from its simple index
+    // (`data-provenance`) — only built-from-source files have one — so the
+    // caller passes that URL through rather than having it reconstructed here.
+    // pypi.org serves the upstream equivalent under /integrity/ by filename.
+    if (url.pathname === '/api/verify-pypi-attestation') {
+      const pkg = url.searchParams.get('pkg');
+      const version = url.searchParams.get('version');
+      const cgrProv = url.searchParams.get('cgrProv');
+      const pypiFile = url.searchParams.get('pypiFile');
+      if (!pkg || !version) return new Response('Missing pkg or version', { status: 400 });
+      const cgrAuthHeaders = await cgrHeaders(req);
+      const getJson = (u, headers) => fetch(u, { headers }).then(r => r.ok ? r.json() : null).catch(() => null);
+
+      try {
+        const pypiUrl = pypiFile
+          ? `https://pypi.org/integrity/${encodeURIComponent(pep503(pkg))}/${encodeURIComponent(version)}/${encodeURIComponent(pypiFile)}/provenance`
+          : null;
+        // Only Chainguard's own registry is fetchable through this route; the
+        // URL arrives from the client, so it can't be an open proxy.
+        const cgrUrl = cgrProv && cgrProv.startsWith('https://libraries.cgr.dev/') ? cgrProv : null;
+        const [pypiRes, cgrRes] = await Promise.all([
+          pypiUrl ? getJson(pypiUrl) : null,
+          cgrUrl ? getJson(cgrUrl, cgrAuthHeaders) : null,
+        ]);
+        return new Response(JSON.stringify({ pypi: processPep740(pypiRes), cgr: processPep740(cgrRes) }), { headers: { 'Content-Type': 'application/json' } });
       } catch (err) {
         return new Response(JSON.stringify({ error: err.message }), { status: 502, headers: { 'Content-Type': 'application/json' } });
       }
@@ -1728,28 +1844,30 @@ Bun.serve({
       if (!platformToken) {
         return new Response(JSON.stringify({ versions: [], authRequired: true }), { headers: { 'Content-Type': 'application/json' } });
       }
-      const id = `maven:${group}:${artifact}`;
-      const base = `https://console-api.enforce.dev/libraries/v1/artifacts/${encodeURIComponent(id)}/versions`;
       try {
-        const versions = [];
-        let pageToken = '';
-        for (let i = 0; i < 50; i++) { // safety cap against a runaway paging loop
-          const params = new URLSearchParams({ page_size: '1000' });
-          if (pageToken) params.set('page_token', pageToken);
-          const res = await fetch(`${base}?${params}`, { headers: { Authorization: `Bearer ${platformToken}` } });
-          if (res.status === 404) break; // not in catalog → no built-from-source versions
-          if (!res.ok) {
-            const text = await res.text();
-            return new Response(JSON.stringify({ versions: [], error: `console-api HTTP ${res.status}: ${text.slice(0, 200)}` }), { status: 502, headers: { 'Content-Type': 'application/json' } });
-          }
-          const data = await res.json();
-          for (const it of (data.items || [])) if (it.version) versions.push(it.version);
-          pageToken = data.nextPageToken || data.next_page_token || '';
-          if (!pageToken) break;
-        }
-        return new Response(JSON.stringify({ versions }), { headers: { 'Content-Type': 'application/json' } });
+        const items = await librariesCatalogVersions(`maven:${group}:${artifact}`);
+        return new Response(JSON.stringify({ versions: items.map(it => it.version) }), { headers: { 'Content-Type': 'application/json' } });
       } catch (err) {
         return new Response(JSON.stringify({ versions: [], error: err.message }), { status: 502, headers: { 'Content-Type': 'application/json' } });
+      }
+    }
+
+    // Per-version Chainguard build dates for a Python package, from the same
+    // catalog. Only the two timestamps are passed through: the raw response is
+    // ~7x larger and the browser needs nothing else from it.
+    if (url.pathname === '/api/cgr-python-catalog') {
+      const pkg = url.searchParams.get('package');
+      if (!pkg) return new Response('Missing package', { status: 400 });
+      if (!platformToken) {
+        return new Response(JSON.stringify({ versions: {}, authRequired: true }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      try {
+        const items = await librariesCatalogVersions(`pypi:${pep503(pkg)}`);
+        const versions = {};
+        for (const it of items) versions[it.version] = { builtAt: it.createdAt || null, updatedAt: it.updatedAt || null };
+        return new Response(JSON.stringify({ versions }), { headers: { 'Content-Type': 'application/json' } });
+      } catch (err) {
+        return new Response(JSON.stringify({ versions: {}, error: err.message }), { status: 502, headers: { 'Content-Type': 'application/json' } });
       }
     }
 
