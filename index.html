@@ -1104,7 +1104,7 @@
     <form class="search-box" id="scan-form" style="flex-wrap:wrap; gap:0.5rem;">
       <div class="bulk-drop-zone" id="scan-drop-zone">
         <textarea id="scan-input" class="pkg-input"
-          placeholder="Paste or drag &amp; drop an npm package-lock.json, a Python requirements.txt / poetry.lock, or a list of Maven group:artifact:version coordinates — every pinned package is checked against the Chainguard malware database and for backported CVE remediation"
+          placeholder="Paste or drag &amp; drop an npm package-lock.json, a list of npm name@version lines, a Python requirements.txt / poetry.lock, or a list of Maven group:artifact:version coordinates — every pinned package is checked against the Chainguard malware database and for backported CVE remediation"
           rows="6"
           style="resize:vertical; font-family:'SFMono-Regular',Consolas,monospace; font-size:0.82rem; width:100%; box-sizing:border-box; height:auto;"
           spellcheck="false"
@@ -1135,7 +1135,7 @@
     <div class="results" id="scan-results">
       <div class="status-placeholder">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-        Upload a package-lock.json, requirements.txt, or a list of Maven group:artifact:version coordinates to check every dependency against the malware database and for backported CVE remediation
+        Upload a package-lock.json, requirements.txt, a list of npm name@version lines, or a list of Maven group:artifact:version coordinates to check every dependency against the malware database and for backported CVE remediation
       </div>
     </div>
   </div>
@@ -3893,7 +3893,8 @@ function scanExactPin(spec) {
 }
 
 // Dispatch on file shape: JSON → npm package-lock; [[package]] → poetry.lock;
-// coordinate lines → Maven GAV list; otherwise → requirements.txt.
+// coordinate lines → Maven GAV list; `name@version` lines → npm list;
+// otherwise → requirements.txt.
 // Returns { ecosystem, packages, ... } or { error }.
 function scanParse(text) {
   const trimmed = text.trim();
@@ -3909,6 +3910,7 @@ function scanParse(text) {
   if (trimmed.includes('# yarn lockfile') || trimmed.startsWith('__metadata:') ||
       /\n  version "[^"]+"/.test(trimmed)) return scanParseYarnLock(trimmed);
   if (scanLooksLikeGav(trimmed)) return scanParseGav(trimmed);
+  if (scanLooksLikeNpmList(trimmed)) return scanParseNpmList(trimmed);
   return scanParseRequirements(trimmed);
 }
 
@@ -3953,6 +3955,39 @@ function scanParseGav(text) {
   }
   if (!out.length) return { error: 'No Maven coordinates found — expected one "group:artifact:version" per line.' };
   return { ecosystem: 'maven', packages: out, skipped };
+}
+
+// npm `name@version` lists — one per line, the shape `npm ls`, an SBOM export,
+// or a hand-kept dependency inventory produces. Scoped names carry their own
+// leading `@`, so the version is read from the last `@`. The version has to
+// start with a digit: that keeps PEP 508 direct references (`foo @ git+https…`)
+// and range specs (`foo@^1.2.3`, which pin nothing to check) out.
+const NPM_NV_RE = /^((?:@[A-Za-z0-9._-]+\/)?[A-Za-z0-9._-]+)@(\d[^\s@]*)$/;
+
+// Recognized by shape, like the Maven list: no header to key off. npm/yarn
+// locks and poetry.lock are caught earlier, requirements.txt lines use `==`,
+// and Maven coordinates need colons, so none of the four collide.
+function scanLooksLikeNpmList(text) {
+  const lines = scanGavLines(text);
+  if (!lines.length) return false;
+  return lines.filter(l => NPM_NV_RE.test(l)).length / lines.length >= 0.8;
+}
+
+function scanParseNpmList(text) {
+  const out = [];
+  const seen = new Set();
+  let skipped = 0;
+  for (const line of scanGavLines(text)) {
+    const m = NPM_NV_RE.exec(line);
+    if (!m) { skipped++; continue; }
+    const [, name, version] = m;
+    const key = `${name}@${version}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name, version, dev: false });
+  }
+  if (!out.length) return { error: 'No npm packages found — expected one "name@version" per line.' };
+  return { ecosystem: 'npm', packages: out, format: 'npm-list', skipped };
 }
 
 function scanParseYarnLock(text) {
@@ -4454,7 +4489,7 @@ function scanClear() {
   _scanSourceName = null;
   document.getElementById('scan-results').innerHTML = `<div class="status-placeholder">
     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-    Upload a package-lock.json, requirements.txt, or a list of Maven group:artifact:version coordinates to check every dependency against the malware database and for backported CVE remediation
+    Upload a package-lock.json, requirements.txt, a list of npm name@version lines, or a list of Maven group:artifact:version coordinates to check every dependency against the malware database and for backported CVE remediation
   </div>`;
 }
 
@@ -4564,7 +4599,9 @@ document.getElementById('scan-form').addEventListener('submit', async (e) => {
 
     const notes = [];
     const flagged = packages.some(p => p.status !== 'clean');
-    if (ecosystem === 'npm' && parsed.lockfileVersion < 2 && !flagged) {
+    if (parsed.format === 'npm-list' && parsed.skipped > 0) {
+      notes.push(`<div class="banner warn">Skipped ${parsed.skipped} line${parsed.skipped !== 1 ? 's' : ''} that did not parse as <code>name@version</code> pinned to an exact version.</div>`);
+    } else if (ecosystem === 'npm' && parsed.lockfileVersion < 2 && !flagged) {
       notes.push(`<div class="banner warn">Parsed a lockfileVersion 1 file — for the most complete transitive coverage, regenerate with a modern npm (lockfileVersion 3).</div>`);
     } else if (ecosystem === 'pypi' && parsed.unpinned > 0) {
       notes.push(`<div class="banner warn">${parsed.unpinned} of ${packages.length} requirement${parsed.unpinned !== 1 ? 's are' : ' is'} not pinned to an exact <code>==</code> version — those can only be checked for package-level malware history, not an exact-version hit. For a complete scan, use a fully pinned file (e.g. <code style="font-family:monospace;background:#fef3c7;padding:1px 4px;border-radius:3px">uv pip compile</code> output or <code style="font-family:monospace;background:#fef3c7;padding:1px 4px;border-radius:3px">pip freeze</code>).</div>`);
