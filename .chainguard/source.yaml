@@ -3,7 +3,7 @@ spec:
     - keyless:
         url: https://fulcio.sigstore.dev
         identities:
-          - subjectRegExp: not.andrew@chainguard.dev$
+          - subjectRegExp: .+@chainguard.dev$
             issuer: https://accounts.google.com
       ctlog:
         url: https://rekor.sigstore.dev
