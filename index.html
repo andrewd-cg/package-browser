@@ -1164,6 +1164,8 @@
         <button class="mal-source-chip" data-eco="npm">npm</button>
         <button class="mal-source-chip" data-eco="PyPI">PyPI</button>
         <button class="mal-source-chip" data-eco="Maven">Maven</button>
+        <button class="mal-source-chip" data-eco="NuGet">NuGet</button>
+        <button class="mal-source-chip" data-eco="Go">Go</button>
       </div>
       <div class="mal-source-chips" style="margin-bottom:0;" id="lag-source-chips">
         <!-- "All sources" is fixed; the per-source chips are rendered from
@@ -4660,6 +4662,19 @@ function malCalcLag(publishedAt, blockedAt) {
   return s >= 0 ? s : null;
 }
 
+// Upstream registry page for a blocked package. Maven names are stored as
+// `group/artifact`; every other ecosystem stores the name verbatim.
+function malPkgLink(name, eco) {
+  if (eco === 'PyPI')  return `https://pypi.org/project/${encodeURIComponent(name)}/`;
+  if (eco === 'NuGet') return `https://www.nuget.org/packages/${encodeURIComponent(name)}`;
+  if (eco === 'Go')    return `https://pkg.go.dev/${encodeURI(name)}`;
+  if (eco === 'Maven') {
+    const [g, a] = name.split('/');
+    return `https://search.maven.org/artifact/${encodeURIComponent(g || name)}/${encodeURIComponent(a || '')}`;
+  }
+  return npmPkgUrl(name);
+}
+
 
 async function malLoadStatus() {
   const res = await fetch('/api/cgr-malware/status');
@@ -5102,11 +5117,7 @@ async function lagLoadDrillDown() {
   document.getElementById('lag-dd-prev').disabled = page === 0;
   document.getElementById('lag-dd-next').disabled = end >= res.total;
 
-  const pkgLink = (name, eco) => {
-    if (eco === 'PyPI') return `https://pypi.org/project/${encodeURIComponent(name)}/`;
-    if (eco === 'Maven') { const [g,a] = name.split('/'); return `https://search.maven.org/artifact/${encodeURIComponent(g||name)}/${encodeURIComponent(a||'')}`; }
-    return npmPkgUrl(name);
-  };
+  const pkgLink = malPkgLink;
 
   const tbody = res.rows.map(r => {
     const lag = malCalcLag(r.published_at, r.blocked_at);
@@ -5265,11 +5276,7 @@ async function lagLoadTable() {
   document.getElementById('lag-table-prev').disabled = lagTableState.page === 0;
   document.getElementById('lag-table-next').disabled = end >= res.total;
 
-  const pkgLink = (name, eco) => {
-    if (eco === 'PyPI') return `https://pypi.org/project/${encodeURIComponent(name)}/`;
-    if (eco === 'Maven') { const [g,a] = name.split('/'); return `https://search.maven.org/artifact/${encodeURIComponent(g||name)}/${encodeURIComponent(a||'')}` ; }
-    return npmPkgUrl(name);
-  };
+  const pkgLink = malPkgLink;
 
   const el = document.getElementById('lag-table-results');
   if (res.rows.length === 0) {

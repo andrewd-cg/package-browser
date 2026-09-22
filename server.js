@@ -201,6 +201,58 @@ async function fetchMavenTimestamps(packageName, versions) {
   return out;
 }
 
+// nuget.org's registration index carries a `published` timestamp per version.
+// Pages are inlined for small packages and linked for large ones; malware
+// packages are invariably tiny, but follow the link so the big ones still work.
+async function fetchNuGetTimestamps(packageName) {
+  const id = packageName.toLowerCase(); // the registration path is lowercased
+  const res = await fetch(`https://api.nuget.org/v3/registration5-semver1/${encodeURIComponent(id)}/index.json`);
+  if (!res.ok) return null;
+  const data = await res.json();
+
+  const out = {};
+  for (const page of data.items || []) {
+    let entries = page.items;
+    if (!entries && page['@id']) {
+      const pageRes = await fetch(page['@id']);
+      entries = pageRes.ok ? (await pageRes.json()).items : null;
+    }
+    for (const entry of entries || []) {
+      const ce = entry.catalogEntry;
+      if (ce?.version && ce.published) out[ce.version] = new Date(ce.published).toISOString();
+    }
+  }
+  out[''] = Object.values(out).sort()[0] || null; // package-wide block
+  return out;
+}
+
+// The Go module proxy escapes uppercase letters as '!' + lowercase so that
+// module paths stay unambiguous on case-insensitive filesystems.
+function goEscapeModule(module) {
+  return module.replace(/[A-Z]/g, c => '!' + c.toLowerCase());
+}
+
+async function fetchGoTimestamps(module, versions) {
+  const escaped = goEscapeModule(module);
+  const fetchInfo = async (path) => {
+    const res = await fetch(`https://proxy.golang.org/${escaped}/${path}`);
+    if (!res.ok) return null;
+    const info = await res.json();
+    return info?.Time ? new Date(info.Time).toISOString() : null;
+  };
+
+  const out = {};
+  for (const version of versions) {
+    if (!version) continue;
+    const ts = await fetchInfo(`@v/${encodeURIComponent(version)}.info`);
+    if (ts) out[version] = ts;
+  }
+  // Package-wide block: @v/list is empty for modules that only ever published
+  // pseudo-versions, so date it from @latest (module root, not under @v/).
+  if (versions.includes('')) out[''] = await fetchInfo('@latest');
+  return out;
+}
+
 async function runMalwareEnrich() {
   if (enrichState.running) throw new Error('Enrichment already in progress');
   enrichState.running = true;
@@ -237,6 +289,8 @@ async function runMalwareEnrich() {
           let timeMap;
           if (ecosystem === 'npm')        timeMap = await withTimeout(fetchNpmTimestamps(package_name));
           else if (ecosystem === 'PyPI')  timeMap = await withTimeout(fetchPypiTimestamps(package_name));
+          else if (ecosystem === 'NuGet') timeMap = await withTimeout(fetchNuGetTimestamps(package_name));
+          else if (ecosystem === 'Go')    timeMap = await withTimeout(fetchGoTimestamps(package_name, versions));
           else                            timeMap = await withTimeout(fetchMavenTimestamps(package_name, versions));
 
           db.transaction(() => {
@@ -269,6 +323,8 @@ const PLATFORM_ECOSYSTEMS = [
   { apiName: 'npm',   dbName: 'npm'   },
   { apiName: 'Maven', dbName: 'Maven' },
   { apiName: 'PyPI',  dbName: 'PyPI'  },
+  { apiName: 'NuGet', dbName: 'NuGet' },
+  { apiName: 'Go',    dbName: 'Go'    },
 ];
 
 // One-time cleanup: earlier syncs stored rows under the API's inconsistent ecosystem
