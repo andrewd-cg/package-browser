@@ -110,6 +110,9 @@
   .lag-stat-cell .lsc-label { font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:2px; }
   .lag-stat-cell .lsc-value { font-size:1.05rem; font-weight:700; color:#1e293b; }
   .lag-stat-cell .lsc-value.good { color:#16a34a; }
+  .lag-stat-cell .lsc-sub { font-size:0.68rem; color:#94a3b8; margin-top:1px; line-height:1.3; }
+  /* "of N package-versions" needs more room than a bare stat value. */
+  .lag-stat-cell.lsc-wide { flex:1.4; min-width:132px; }
   .lag-chart-wrap { background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:1rem; margin-bottom:1rem; }
   .vex-chart-wrap { background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:0.75rem 1rem; margin-bottom:0.75rem; }
   .vex-chart-wrap rect { transition: opacity 0.1s; }
@@ -1208,7 +1211,11 @@
     </div>
     <!-- stat cards -->
     <div class="lag-stat-grid" id="lag-stat-grid">
-      <div class="lag-stat-cell"><div class="lsc-label">Malicious packages</div><div class="lsc-value" id="lsc-n">—</div></div>
+      <div class="lag-stat-cell lsc-wide" data-tip="Lag is measured from the package's publish date, so only entries with a known publish date are counted. Registries that hard-delete malware (nuget.org) leave nothing to date.">
+        <div class="lsc-label">Lag sample</div>
+        <div class="lsc-value" id="lsc-n">—</div>
+        <div class="lsc-sub" id="lsc-n-sub"></div>
+      </div>
       <div class="lag-stat-cell"><div class="lsc-label">Median</div><div class="lsc-value" id="lsc-median">—</div></div>
       <div class="lag-stat-cell"><div class="lsc-label">Mean</div><div class="lsc-value" id="lsc-mean">—</div></div>
       <div class="lag-stat-cell"><div class="lsc-label">P90</div><div class="lsc-value" id="lsc-p90">—</div></div>
@@ -5074,12 +5081,20 @@ async function lagLoadStats() {
     ['lsc-n','lsc-median','lsc-mean','lsc-p90','lsc-p99','lsc-1h','lsc-3h','lsc-12h','lsc-24h','lsc-7d'].forEach(id => {
       document.getElementById(id).textContent = '—';
     });
+    document.getElementById('lsc-n-sub').textContent = stats?.overall?.eligible
+      ? `0 of ${stats.overall.eligible.toLocaleString()} package-versions`
+      : '';
     document.getElementById('lag-chart-svg').innerHTML = '';
     return;
   }
 
   const o = stats.overall;
   document.getElementById('lsc-n').textContent      = o.n.toLocaleString();
+  // Spell out the denominator: the gap is entries with no publish date to
+  // measure from, not a filter the user can widen.
+  document.getElementById('lsc-n-sub').textContent  = o.eligible != null
+    ? `of ${o.eligible.toLocaleString()} package-versions`
+    : '';
   document.getElementById('lsc-median').textContent = malFmtLag(o.median_s);
   document.getElementById('lsc-mean').textContent   = malFmtLag(o.mean_s);
   document.getElementById('lsc-p90').textContent    = malFmtLag(o.p90_s);

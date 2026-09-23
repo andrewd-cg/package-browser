@@ -2222,15 +2222,27 @@ Bun.serve({
 
       const source = url.searchParams.get('source') || '';
 
-      const where = [`published_at IS NOT NULL`, `published_at NOT IN ('NOT_FOUND','ERROR')`, `blocked_at >= published_at`];
-      const args = [];
-      if (eco)       { where.push('ecosystem = ?');     args.push(eco); }
-      if (source)    { where.push('source = ?');        args.push(source); }
-      if (since)     { where.push('blocked_at >= ?');   args.push(since); }
-      if (until)     { where.push('blocked_at <  ?');   args.push(until); }
+      // Filters that don't depend on a known publish date. These alone give the
+      // denominator for the lag sample: how many entries the tab *would* cover
+      // if every one of them could be dated.
+      const baseWhere = [];
+      const baseArgs = [];
+      if (eco)    { baseWhere.push('ecosystem = ?');   baseArgs.push(eco); }
+      if (source) { baseWhere.push('source = ?');      baseArgs.push(source); }
+      if (since)  { baseWhere.push('blocked_at >= ?'); baseArgs.push(since); }
+      if (until)  { baseWhere.push('blocked_at <  ?'); baseArgs.push(until); }
+
+      // Lag is blocked_at - published_at, so every stat below needs a real
+      // publish date. Undated rows ('NOT_FOUND'/'ERROR'/NULL) drop out here.
+      const where = [`published_at IS NOT NULL`, `published_at NOT IN ('NOT_FOUND','ERROR')`, `blocked_at >= published_at`, ...baseWhere];
+      const args = [...baseArgs];
       if (pub_since) { where.push('published_at >= ?'); args.push(pub_since); }
       if (pub_until) { where.push('published_at <  ?'); args.push(pub_until); }
       const whereSql = `WHERE ${where.join(' AND ')}`;
+
+      const eligible = db.prepare(
+        `SELECT COUNT(*) AS n FROM malware${baseWhere.length ? ` WHERE ${baseWhere.join(' AND ')}` : ''}`
+      ).get(...baseArgs).n;
       const lagExpr = `(julianday(blocked_at) - julianday(published_at)) * 86400.0`;
 
       const overall = db.prepare(
@@ -2299,6 +2311,7 @@ Bun.serve({
           p90_s:    percentileRows?.p90_s    ?? null,
           p99_s:    percentileRows?.p99_s    ?? null,
           ...thresholds,
+          eligible,
         },
         byEco,
         histogram,
