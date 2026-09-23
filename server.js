@@ -674,6 +674,36 @@ function malwareStatus() {
   return { total, byEco, lastSyncAt: lastSync?.value || null, sync: { ...syncState }, platformToken: tokenStatus, enrich: { ...enrichCounts, state: { ...enrichState } }, vex };
 }
 
+// The same headline the status endpoint reports, narrowed to a browse filter.
+// `where`/`args` must only reference `vex` columns, so no severity join is
+// needed to scope the subqueries. Bands are counted over distinct CVEs, matching
+// how the global figures are built.
+function vexBrowseSummary(where, args) {
+  const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  const and = where.length ? `AND ${where.join(' AND ')}` : '';
+  const cves = db.prepare(`SELECT COUNT(DISTINCT cve) AS n FROM vex WHERE cve IS NOT NULL AND cve != '' ${and}`).get(...args).n;
+  const vulns = db.prepare(`
+    SELECT COUNT(DISTINCT COALESCE(NULLIF(cve, ''), ghsa)) AS n FROM vex
+    WHERE COALESCE(NULLIF(cve, ''), ghsa) IS NOT NULL ${and}
+  `).get(...args).n;
+  const packages = db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM vex ${whereSql} GROUP BY ecosystem, package_name)`).get(...args).n;
+  const fixes = db.prepare(`SELECT COUNT(*) AS n FROM (SELECT 1 FROM vex ${whereSql} GROUP BY ecosystem, package_name, vuln_name)`).get(...args).n;
+  const sevRows = db.prepare(`
+    SELECT s.severity AS severity, COUNT(*) AS n FROM (
+      SELECT DISTINCT cve AS id FROM vex WHERE cve IS NOT NULL AND cve != '' ${and}
+    ) v
+    LEFT JOIN cve_severity s ON s.vuln_id = v.id
+    GROUP BY 1
+  `).all(...args);
+  const bySeverity = Object.fromEntries(SEVERITY_BANDS.map(b => [b, 0]));
+  let pending = 0;
+  for (const r of sevRows) {
+    bySeverity[normSeverityBand(r.severity)] += r.n;
+    if (r.severity === null) pending += r.n;
+  }
+  return { cves, vulns, fixes, packages, bySeverity, pending };
+}
+
 const SCOPE_NORM = { 'MALWARE_SCOPE_VERSION': 'version', 'MALWARE_SCOPE_PACKAGE': 'package', 'MALWARE_SCOPE_UNKNOWN': '' };
 function normScope(s) { return SCOPE_NORM[s] ?? s ?? ''; }
 
@@ -2006,6 +2036,10 @@ Bun.serve({
         const like = `%${q}%`;
         args.push(like, like, like, like, like);
       }
+      // The headline and the severity chips describe the ecosystem/search/bucket
+      // selection, not the band filter — a band has to keep showing its siblings
+      // to stay clickable — so snapshot the filters before the band goes on.
+      const summary = vexBrowseSummary(where, args);
       // An unenriched or sentinel id reads as UNKNOWN here, matching how the
       // status endpoint buckets it — so a band filter never hides rows.
       if (isSeverityBand(sevRaw)) { where.push(`${VEX_SEV_ROW} = ?`); args.push(normSeverityBand(sevRaw)); }
@@ -2050,7 +2084,7 @@ Bun.serve({
         baseVersions: (r.base_versions || '').split(',').filter(Boolean),
         fullVersions: (r.full_versions || '').split(',').filter(Boolean),
       }));
-      return new Response(JSON.stringify({ total, rows: out, limit, offset }), { headers: { 'Content-Type': 'application/json' } });
+      return new Response(JSON.stringify({ total, summary, rows: out, limit, offset }), { headers: { 'Content-Type': 'application/json' } });
     }
 
     // New backported fixes per month (same filter shape as /browse). One fix =

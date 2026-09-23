@@ -1267,9 +1267,6 @@
   <!-- backported CVE remediation (VEX) tab -->
   <div id="tab-vex" class="tab-pane">
     <div class="mal-bar">
-      <span><span class="mal-stat" id="vex-cves">0</span> distinct CVEs fixed across <span class="mal-stat" id="vex-pkgs">0</span> packages · Last sync: <span class="mal-stat" id="vex-last-sync">never</span></span>
-      <span id="vex-sev-chips" style="display:flex; gap:0.3rem; flex-wrap:wrap;"></span>
-      <span style="flex:1"></span>
       <span style="font-size:0.82rem;color:#64748b;">Chainguard rebuilds upstream releases with security fixes backported. Source: <a href="https://libraries.cgr.dev/openvex/v1/all.json" target="_blank" rel="noopener" style="color:#3b82f6;">OpenVEX feed</a>.</span>
     </div>
     <div class="mal-bar" style="flex-wrap:wrap; gap:0.4rem 0.75rem;">
@@ -1299,6 +1296,10 @@
         <span id="vex-chart-legend" style="display:flex;gap:0.75rem;font-size:0.72rem;color:#475569;"></span>
       </div>
       <svg id="vex-chart-svg" style="display:block;width:100%;" height="170"></svg>
+    </div>
+    <div class="mal-bar" style="flex-wrap:wrap; gap:0.4rem 0.75rem;">
+      <span><span class="mal-stat" id="vex-cves">0</span> distinct CVEs fixed across <span class="mal-stat" id="vex-pkgs">0</span> packages · Last sync: <span class="mal-stat" id="vex-last-sync">never</span></span>
+      <span id="vex-sev-chips" style="display:flex; gap:0.3rem; flex-wrap:wrap;"></span>
     </div>
     <div class="results" id="vex-results"></div>
     <div class="banners" id="vex-banners"></div>
@@ -5356,21 +5357,27 @@ function vexAdvisoryLink(id) {
   return null;
 }
 
+// Only the sync date is global; the headline and chips come from /browse so they
+// track the ecosystem, search and month filters.
 async function vexLoadStatus() {
   try {
     const s = await fetch('/api/cgr-malware/status').then(r => r.json());
-    const v = s.vex || {};
-    const cves = document.getElementById('vex-cves');
-    cves.textContent = (v.cves || 0).toLocaleString();
-    const cveTip = [`${(v.fixes || 0).toLocaleString()} package × vulnerability fixes in total`];
-    // A few statements carry only a GHSA, so vulnerabilities outnumber CVEs. The
-    // severity chips count CVEs so they sum to the headline beside them.
-    if (v.vulns > v.cves) cveTip.push(`${v.vulns.toLocaleString()} distinct vulnerabilities including ${(v.vulns - v.cves).toLocaleString()} with no CVE id`);
-    cves.title = cveTip.join('\n');
-    document.getElementById('vex-pkgs').textContent = (v.packages || 0).toLocaleString();
-    document.getElementById('vex-last-sync').textContent = v.lastSyncAt ? formatDateUTC(v.lastSyncAt) : 'never';
-    vexRenderSevChips(v);
+    const lastSyncAt = s.vex?.lastSyncAt;
+    document.getElementById('vex-last-sync').textContent = lastSyncAt ? formatDateUTC(lastSyncAt) : 'never';
   } catch { /* leave defaults */ }
+}
+
+function vexRenderSummary(sum) {
+  if (!sum) return;
+  const cves = document.getElementById('vex-cves');
+  cves.textContent = (sum.cves || 0).toLocaleString();
+  const cveTip = [`${(sum.fixes || 0).toLocaleString()} package × vulnerability fixes in total`];
+  // A few statements carry only a GHSA, so vulnerabilities outnumber CVEs. The
+  // severity chips count CVEs so they sum to the headline beside them.
+  if (sum.vulns > sum.cves) cveTip.push(`${sum.vulns.toLocaleString()} distinct vulnerabilities including ${(sum.vulns - sum.cves).toLocaleString()} with no CVE id`);
+  cves.title = cveTip.join('\n');
+  document.getElementById('vex-pkgs').textContent = (sum.packages || 0).toLocaleString();
+  vexRenderSevChips(sum);
 }
 
 // Severity chips double as filters. While the enrichment pass is still running
@@ -5378,7 +5385,7 @@ async function vexLoadStatus() {
 function vexRenderSevChips(v) {
   const el = document.getElementById('vex-sev-chips');
   if (!el) return;
-  const pending = v.severity?.pending || 0;
+  const pending = v.pending || 0;
   const bands = vexSevPresent(v.bySeverity);
   if (pending && !bands.length) {
     el.innerHTML = `<span style="font-size:0.78rem;color:#94a3b8;">Resolving severity for ${pending.toLocaleString()} CVEs…</span>`;
@@ -5419,6 +5426,7 @@ async function vexLoadTable() {
 
   const res = await fetch(`/api/cgr-vex/browse?${p}`).then(r => r.json());
   vexBrowseState.total = res.total;
+  vexRenderSummary(res.summary);
 
   document.getElementById('vex-count').textContent = res.total.toLocaleString();
   const start = res.offset + 1, end = Math.min(res.offset + res.rows.length, res.total);
