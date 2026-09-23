@@ -1470,16 +1470,21 @@ function malwareCurlBtn(eco, pkg) {
   return `<button class="malware-curl-btn" data-eco="${escHtml(eco)}" data-pkg="${escHtml(pkg)}" onclick="copyMalwareCurl(this)" data-tip="Copies a curl command (mints a token inline via chainctl auth token) that queries the Chainguard malware blocklist API for every flagged version of this package">Copy curl to check Malware API</button>`;
 }
 
-// Libraries catalog "copy curl" helpers — the authoritative list of versions
-// Chainguard builds from source. Artifact ids are `maven:group:artifact`,
-// `npm:name`, and `pypi:<PEP 503 name>`; the API 404s for an artifact it has
-// never built.
+// "Copy curl to check Chainguard versions" — reproduces the Chainguard column
+// of the table, which takes two sources, same as the page itself:
+//   1. the Libraries catalog (console-api), which holds only the versions built
+//      from source and 404s for an artifact Chainguard has never built;
+//   2. the registry index, which serves built plus scanned-upstream versions.
+// The two audiences are different: console-api.enforce.dev takes a bearer
+// minted for itself, the registry one for libraries.cgr.dev.
 const CATALOG_CURL_AUTH = `-H "Authorization: Bearer $(chainctl auth token --audience https://console-api.enforce.dev)"`;
+const REGISTRY_CURL_AUTH = `-H "Authorization: Bearer $(chainctl auth token --audience libraries.cgr.dev)"`;
 
-function buildCatalogCurl(eco, pkg) {
+// Catalog artifact ids: `maven:group:artifact`, `npm:name`, `pypi:<PEP 503>`.
+function buildCatalogBuiltCurl(eco, pkg) {
   // A scoped npm name can't go in the path — the API rejects the encoded
-  // slash — so those list the artifact instead, which carries latestVersion
-  // and versionCount.
+  // slash however it's escaped — so those list the artifact instead, which
+  // carries latestVersion and versionCount.
   if (eco === 'npm' && pkg.startsWith('@')) {
     return `curl -s -G 'https://console-api.enforce.dev/libraries/v1/artifacts' ` +
       `--data-urlencode 'ecosystems=JAVASCRIPT' --data-urlencode 'query=${pkg}' ` +
@@ -1490,14 +1495,43 @@ function buildCatalogCurl(eco, pkg) {
     `--data-urlencode 'page_size=1000' ${CATALOG_CURL_AUTH}`;
 }
 
+// The registry index per ecosystem: a Maven maven-metadata.xml, an npm
+// packument (piped through jq — the raw document runs to megabytes), or a
+// PEP 503 simple-index page.
+function buildRegistryCurl(eco, pkg) {
+  if (eco === 'maven') {
+    const [group, artifact] = pkg.split(':');
+    const path = `${group.replace(/\./g, '/')}/${artifact}`;
+    return `curl -s ${REGISTRY_CURL_AUTH} 'https://libraries.cgr.dev/java/${path}/maven-metadata.xml'`;
+  }
+  if (eco === 'pypi') {
+    // The simple index 301s a non-normalized name, so normalize it up front.
+    return `curl -s ${REGISTRY_CURL_AUTH} 'https://libraries.cgr.dev/python/simple/${encodeURIComponent(pep503(pkg))}/'`;
+  }
+  return `curl -s ${REGISTRY_CURL_AUTH} 'https://libraries.cgr.dev/javascript/${encodeURIComponent(pkg)}' | jq -r '.versions | keys[]'`;
+}
+
+function buildCatalogCurl(eco, pkg) {
+  return [
+    '# Versions Chainguard builds from source (Libraries catalog)',
+    buildCatalogBuiltCurl(eco, pkg),
+    '',
+    '# Every version the registry serves — built plus scanned upstream',
+    buildRegistryCurl(eco, pkg),
+  ].join('\n');
+}
+
 function copyCatalogCurl(btn) {
   copyToClipboard(buildCatalogCurl(btn.dataset.eco, btn.dataset.pkg), btn);
 }
 
 function catalogCurlBtn(eco, pkg) {
-  const tip = eco === 'npm' && pkg.startsWith('@')
-    ? 'Copies a curl command (mints a token inline via chainctl auth token) that looks this scoped package up in the Chainguard Libraries catalog — the per-version endpoint rejects scoped names, so this reports the latest version and the count built from source'
-    : 'Copies a curl command (mints a token inline via chainctl auth token) that lists every version of this package Chainguard builds from source, via the Libraries catalog API';
+  const scoped = eco === 'npm' && pkg.startsWith('@')
+    ? ' The catalog\'s per-version endpoint rejects scoped npm names, so that call reports the latest built version and the count instead.'
+    : '';
+  const tip = 'Copies two curl commands (each minting its own token inline via chainctl auth token): ' +
+    'the Libraries catalog, for the versions built from source, and the registry index, for every version served — ' +
+    'built plus scanned upstream. Together they reproduce the Chainguard column of this table.' + scoped;
   return `<button class="catalog-curl-btn" data-eco="${escHtml(eco)}" data-pkg="${escHtml(pkg)}" onclick="copyCatalogCurl(this)" data-tip="${escHtml(tip)}">Copy curl to check Chainguard versions</button>`;
 }
 
