@@ -476,15 +476,15 @@
   .malware-curl-btn:hover { background: #fee2e2; border-color: #f87171; }
   .malware-curl-btn.copied { background: #f0fdf4; color: #16a34a; border-color: #86efac; }
   .curl-btn-row { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
-  .catalog-curl-btn {
+  .versions-curl-btn {
     display: inline-flex; align-items: center; gap: 0.35rem;
     background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px;
     padding: 3px 10px; font: inherit; font-size: 0.75rem; font-weight: 500;
     color: #1d4ed8; cursor: pointer; white-space: nowrap;
     transition: background 0.15s, color 0.15s, border-color 0.15s;
   }
-  .catalog-curl-btn:hover { background: #dbeafe; border-color: #60a5fa; }
-  .catalog-curl-btn.copied { background: #f0fdf4; color: #16a34a; border-color: #86efac; }
+  .versions-curl-btn:hover { background: #dbeafe; border-color: #60a5fa; }
+  .versions-curl-btn.copied { background: #f0fdf4; color: #16a34a; border-color: #86efac; }
 
   .table-wrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
@@ -1470,35 +1470,16 @@ function malwareCurlBtn(eco, pkg) {
   return `<button class="malware-curl-btn" data-eco="${escHtml(eco)}" data-pkg="${escHtml(pkg)}" onclick="copyMalwareCurl(this)" data-tip="Copies a curl command (mints a token inline via chainctl auth token) that queries the Chainguard malware blocklist API for every flagged version of this package">Copy curl to check Malware API</button>`;
 }
 
-// "Copy curl to check Chainguard versions" — reproduces the Chainguard column
-// of the table, which takes two sources, same as the page itself:
-//   1. the Libraries catalog (console-api), which holds only the versions built
-//      from source and 404s for an artifact Chainguard has never built;
-//   2. the registry index, which serves built plus scanned-upstream versions.
-// The two audiences are different: console-api.enforce.dev takes a bearer
-// minted for itself, the registry one for libraries.cgr.dev.
-const CATALOG_CURL_AUTH = `-H "Authorization: Bearer $(chainctl auth token --audience https://console-api.enforce.dev)"`;
+// "Copy curl to check Chainguard versions" — every version Chainguard serves,
+// built from source or scanned upstream alike. That is the registry index: a
+// Maven maven-metadata.xml, an npm packument, or a PEP 503 simple page. It is
+// a superset of the Libraries catalog, which lists only what is built from
+// source, so one call answers "can I pull this version". The registry takes a
+// bearer minted for libraries.cgr.dev, not the console-api audience the
+// malware button uses.
 const REGISTRY_CURL_AUTH = `-H "Authorization: Bearer $(chainctl auth token --audience libraries.cgr.dev)"`;
 
-// Catalog artifact ids: `maven:group:artifact`, `npm:name`, `pypi:<PEP 503>`.
-function buildCatalogBuiltCurl(eco, pkg) {
-  // A scoped npm name can't go in the path — the API rejects the encoded
-  // slash however it's escaped — so those list the artifact instead, which
-  // carries latestVersion and versionCount.
-  if (eco === 'npm' && pkg.startsWith('@')) {
-    return `curl -s -G 'https://console-api.enforce.dev/libraries/v1/artifacts' ` +
-      `--data-urlencode 'ecosystems=JAVASCRIPT' --data-urlencode 'query=${pkg}' ` +
-      `--data-urlencode 'page_size=50' ${CATALOG_CURL_AUTH}`;
-  }
-  const id = eco === 'maven' ? `maven:${pkg}` : eco === 'pypi' ? `pypi:${pep503(pkg)}` : `npm:${pkg}`;
-  return `curl -s -G 'https://console-api.enforce.dev/libraries/v1/artifacts/${encodeURIComponent(id)}/versions' ` +
-    `--data-urlencode 'page_size=1000' ${CATALOG_CURL_AUTH}`;
-}
-
-// The registry index per ecosystem: a Maven maven-metadata.xml, an npm
-// packument (piped through jq — the raw document runs to megabytes), or a
-// PEP 503 simple-index page.
-function buildRegistryCurl(eco, pkg) {
+function buildVersionsCurl(eco, pkg) {
   if (eco === 'maven') {
     const [group, artifact] = pkg.split(':');
     const path = `${group.replace(/\./g, '/')}/${artifact}`;
@@ -1508,31 +1489,18 @@ function buildRegistryCurl(eco, pkg) {
     // The simple index 301s a non-normalized name, so normalize it up front.
     return `curl -s ${REGISTRY_CURL_AUTH} 'https://libraries.cgr.dev/python/simple/${encodeURIComponent(pep503(pkg))}/'`;
   }
+  // The raw packument runs to megabytes, so keep just the version keys.
   return `curl -s ${REGISTRY_CURL_AUTH} 'https://libraries.cgr.dev/javascript/${encodeURIComponent(pkg)}' | jq -r '.versions | keys[]'`;
 }
 
-function buildCatalogCurl(eco, pkg) {
-  return [
-    '# Versions Chainguard builds from source (Libraries catalog)',
-    buildCatalogBuiltCurl(eco, pkg),
-    '',
-    '# Every version the registry serves — built plus scanned upstream',
-    buildRegistryCurl(eco, pkg),
-  ].join('\n');
+function copyVersionsCurl(btn) {
+  copyToClipboard(buildVersionsCurl(btn.dataset.eco, btn.dataset.pkg), btn);
 }
 
-function copyCatalogCurl(btn) {
-  copyToClipboard(buildCatalogCurl(btn.dataset.eco, btn.dataset.pkg), btn);
-}
-
-function catalogCurlBtn(eco, pkg) {
-  const scoped = eco === 'npm' && pkg.startsWith('@')
-    ? ' The catalog\'s per-version endpoint rejects scoped npm names, so that call reports the latest built version and the count instead.'
-    : '';
-  const tip = 'Copies two curl commands (each minting its own token inline via chainctl auth token): ' +
-    'the Libraries catalog, for the versions built from source, and the registry index, for every version served — ' +
-    'built plus scanned upstream. Together they reproduce the Chainguard column of this table.' + scoped;
-  return `<button class="catalog-curl-btn" data-eco="${escHtml(eco)}" data-pkg="${escHtml(pkg)}" onclick="copyCatalogCurl(this)" data-tip="${escHtml(tip)}">Copy curl to check Chainguard versions</button>`;
+function versionsCurlBtn(eco, pkg) {
+  const tip = 'Copies a curl command (mints a token inline via chainctl auth token) that lists every version of ' +
+    'this package Chainguard serves — built from source and scanned upstream alike — from the registry index';
+  return `<button class="versions-curl-btn" data-eco="${escHtml(eco)}" data-pkg="${escHtml(pkg)}" onclick="copyVersionsCurl(this)" data-tip="${escHtml(tip)}">Copy curl to check Chainguard versions</button>`;
 }
 
 // Shared fast hover tooltip. Any element with `data-tip` attribute gets a
@@ -2304,7 +2272,7 @@ function npmRenderTable(data) {
           <a class="pkg-name" href="${npmPkgUrl(name)}?activeTab=versions" target="_blank" rel="noopener">${escHtml(name)}</a>
           <span class="count">${escHtml(countNote)}</span>
         </div>
-        <div class="curl-btn-row">${malwareCurlBtn('npm', name)}${catalogCurlBtn('npm', name)}</div>
+        <div class="curl-btn-row">${malwareCurlBtn('npm', name)}${versionsCurlBtn('npm', name)}</div>
       </div>
       <div class="header-right">
         ${statsH}
@@ -2706,7 +2674,7 @@ function mavenRenderTable(data) {
       <div class="results-title stacked">
         <a class="pkg-name mono" href="${escHtml(mvnSearchUrl)}" target="_blank" rel="noopener">${escHtml(name)}</a>
         <span class="count">${escHtml(countNote)}${sf ? ` · <button class="filter-chip" data-clear-stat title="Clear filter">${escHtml(MAVEN_STAT_LABELS[sf])} ✕</button>` : ''}${data.datesLoading ? ' · <span style="opacity:.65">loading publish dates…</span>' : ''}</span>
-        <div class="curl-btn-row">${malwareCurlBtn('maven', `${group}:${artifact}`)}${catalogCurlBtn('maven', `${group}:${artifact}`)}</div>
+        <div class="curl-btn-row">${malwareCurlBtn('maven', `${group}:${artifact}`)}${versionsCurlBtn('maven', `${group}:${artifact}`)}</div>
       </div>
       <div class="header-right">
         ${statsH}
@@ -3308,7 +3276,7 @@ function pypiRenderTable(data) {
           <a class="pkg-name" href="${escHtml(pypiPkgUrl)}" target="_blank" rel="noopener">${escHtml(name)}</a>
           <span class="count">${escHtml(countNote)}</span>
         </div>
-        <div class="curl-btn-row">${malwareCurlBtn('pypi', name)}${catalogCurlBtn('pypi', name)}</div>
+        <div class="curl-btn-row">${malwareCurlBtn('pypi', name)}${versionsCurlBtn('pypi', name)}</div>
       </div>
       <div class="header-right">
         ${statsH}
