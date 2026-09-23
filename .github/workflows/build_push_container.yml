@@ -29,16 +29,16 @@ jobs:
             flavor: "suffix=-dev,onlatest=true"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: chainguard-actions/actions-checkout@59b7218bfc2eaabc464f1254f6e1dac5bda91d94 # v4
 
       - name: Authenticate to Chainguard
         uses: ./.github/actions/chainguard-auth
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: chainguard-actions/docker-setup-qemu-action@d40f3f46f039b23a2d9d13c16b9aee07ad52e5b2 # v3
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: chainguard-actions/docker-setup-buildx-action@6d415f71ab3ef9a7738ade671313ffac4ba9f06c # v3
 
       - name: Log in to ghcr.io
         uses: docker/login-action@v3
@@ -58,7 +58,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: chainguard-actions/docker-build-push-action@90e59df237ac4b0e77911df31d377167fc308506 # v6
         with:
           context: .
           push: true
