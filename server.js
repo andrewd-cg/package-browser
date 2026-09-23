@@ -219,7 +219,12 @@ async function fetchNuGetTimestamps(packageName) {
     }
     for (const entry of entries || []) {
       const ce = entry.catalogEntry;
-      if (ce?.version && ce.published) out[ce.version] = new Date(ce.published).toISOString();
+      if (!ce?.version || !ce.published) continue;
+      // nuget.org reports `published: 1900-01-01` for unlisted versions rather
+      // than the real upload time. Treat it as unknown — keeping it would put a
+      // 126-year lag into the stats.
+      if (ce.published.startsWith('1900-01-01')) continue;
+      out[ce.version] = new Date(ce.published).toISOString();
     }
   }
   out[''] = Object.values(out).sort()[0] || null; // package-wide block
