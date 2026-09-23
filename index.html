@@ -475,6 +475,16 @@
   }
   .malware-curl-btn:hover { background: #fee2e2; border-color: #f87171; }
   .malware-curl-btn.copied { background: #f0fdf4; color: #16a34a; border-color: #86efac; }
+  .curl-btn-row { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
+  .catalog-curl-btn {
+    display: inline-flex; align-items: center; gap: 0.35rem;
+    background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px;
+    padding: 3px 10px; font: inherit; font-size: 0.75rem; font-weight: 500;
+    color: #1d4ed8; cursor: pointer; white-space: nowrap;
+    transition: background 0.15s, color 0.15s, border-color 0.15s;
+  }
+  .catalog-curl-btn:hover { background: #dbeafe; border-color: #60a5fa; }
+  .catalog-curl-btn.copied { background: #f0fdf4; color: #16a34a; border-color: #86efac; }
 
   .table-wrap { overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
@@ -1460,6 +1470,37 @@ function malwareCurlBtn(eco, pkg) {
   return `<button class="malware-curl-btn" data-eco="${escHtml(eco)}" data-pkg="${escHtml(pkg)}" onclick="copyMalwareCurl(this)" data-tip="Copies a curl command (mints a token inline via chainctl auth token) that queries the Chainguard malware blocklist API for every flagged version of this package">Copy curl to check Malware API</button>`;
 }
 
+// Libraries catalog "copy curl" helpers — the authoritative list of versions
+// Chainguard builds from source. Artifact ids are `maven:group:artifact`,
+// `npm:name`, and `pypi:<PEP 503 name>`; the API 404s for an artifact it has
+// never built.
+const CATALOG_CURL_AUTH = `-H "Authorization: Bearer $(chainctl auth token --audience https://console-api.enforce.dev)"`;
+
+function buildCatalogCurl(eco, pkg) {
+  // A scoped npm name can't go in the path — the API rejects the encoded
+  // slash — so those list the artifact instead, which carries latestVersion
+  // and versionCount.
+  if (eco === 'npm' && pkg.startsWith('@')) {
+    return `curl -s -G 'https://console-api.enforce.dev/libraries/v1/artifacts' ` +
+      `--data-urlencode 'ecosystems=JAVASCRIPT' --data-urlencode 'query=${pkg}' ` +
+      `--data-urlencode 'page_size=50' ${CATALOG_CURL_AUTH}`;
+  }
+  const id = eco === 'maven' ? `maven:${pkg}` : eco === 'pypi' ? `pypi:${pep503(pkg)}` : `npm:${pkg}`;
+  return `curl -s -G 'https://console-api.enforce.dev/libraries/v1/artifacts/${encodeURIComponent(id)}/versions' ` +
+    `--data-urlencode 'page_size=1000' ${CATALOG_CURL_AUTH}`;
+}
+
+function copyCatalogCurl(btn) {
+  copyToClipboard(buildCatalogCurl(btn.dataset.eco, btn.dataset.pkg), btn);
+}
+
+function catalogCurlBtn(eco, pkg) {
+  const tip = eco === 'npm' && pkg.startsWith('@')
+    ? 'Copies a curl command (mints a token inline via chainctl auth token) that looks this scoped package up in the Chainguard Libraries catalog — the per-version endpoint rejects scoped names, so this reports the latest version and the count built from source'
+    : 'Copies a curl command (mints a token inline via chainctl auth token) that lists every version of this package Chainguard builds from source, via the Libraries catalog API';
+  return `<button class="catalog-curl-btn" data-eco="${escHtml(eco)}" data-pkg="${escHtml(pkg)}" onclick="copyCatalogCurl(this)" data-tip="${escHtml(tip)}">Copy curl to check Chainguard versions</button>`;
+}
+
 // Shared fast hover tooltip. Any element with `data-tip` attribute gets a
 // dark floating tooltip after ~50ms (vs the browser's native ~1s `title` delay).
 let _appTooltipEl = null;
@@ -2229,7 +2270,7 @@ function npmRenderTable(data) {
           <a class="pkg-name" href="${npmPkgUrl(name)}?activeTab=versions" target="_blank" rel="noopener">${escHtml(name)}</a>
           <span class="count">${escHtml(countNote)}</span>
         </div>
-        ${malwareCurlBtn('npm', name)}
+        <div class="curl-btn-row">${malwareCurlBtn('npm', name)}${catalogCurlBtn('npm', name)}</div>
       </div>
       <div class="header-right">
         ${statsH}
@@ -2631,7 +2672,7 @@ function mavenRenderTable(data) {
       <div class="results-title stacked">
         <a class="pkg-name mono" href="${escHtml(mvnSearchUrl)}" target="_blank" rel="noopener">${escHtml(name)}</a>
         <span class="count">${escHtml(countNote)}${sf ? ` · <button class="filter-chip" data-clear-stat title="Clear filter">${escHtml(MAVEN_STAT_LABELS[sf])} ✕</button>` : ''}${data.datesLoading ? ' · <span style="opacity:.65">loading publish dates…</span>' : ''}</span>
-        ${malwareCurlBtn('maven', `${group}:${artifact}`)}
+        <div class="curl-btn-row">${malwareCurlBtn('maven', `${group}:${artifact}`)}${catalogCurlBtn('maven', `${group}:${artifact}`)}</div>
       </div>
       <div class="header-right">
         ${statsH}
@@ -3233,7 +3274,7 @@ function pypiRenderTable(data) {
           <a class="pkg-name" href="${escHtml(pypiPkgUrl)}" target="_blank" rel="noopener">${escHtml(name)}</a>
           <span class="count">${escHtml(countNote)}</span>
         </div>
-        ${malwareCurlBtn('pypi', name)}
+        <div class="curl-btn-row">${malwareCurlBtn('pypi', name)}${catalogCurlBtn('pypi', name)}</div>
       </div>
       <div class="header-right">
         ${statsH}
