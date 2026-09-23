@@ -1107,7 +1107,7 @@
     <form class="search-box" id="scan-form" style="flex-wrap:wrap; gap:0.5rem;">
       <div class="bulk-drop-zone" id="scan-drop-zone">
         <textarea id="scan-input" class="pkg-input"
-          placeholder="Paste or drag &amp; drop an npm package-lock.json, a list of npm name@version lines, a Python requirements.txt / poetry.lock, or a list of Maven group:artifact:version coordinates — every pinned package is checked against the Chainguard malware database and for backported CVE remediation"
+          placeholder="Paste or drag &amp; drop an npm package-lock.json, a list of npm name@version lines, a Python requirements.txt / poetry.lock, a Maven pom.xml, or a list of Maven group:artifact:version coordinates — every pinned package is checked against the Chainguard malware database and for backported CVE remediation"
           rows="6"
           style="resize:vertical; font-family:'SFMono-Regular',Consolas,monospace; font-size:0.82rem; width:100%; box-sizing:border-box; height:auto;"
           spellcheck="false"
@@ -1116,7 +1116,7 @@
       <div style="display:flex; align-items:center; gap:0.75rem; flex:1 1 100%; flex-wrap:wrap;">
         <label style="font-size:0.85rem; color:#475569; white-space:nowrap; display:flex; align-items:center; gap:0.4rem;">
           Load file:
-          <input type="file" id="scan-file-input" accept=".json,.txt,.lock" style="font-size:0.82rem;">
+          <input type="file" id="scan-file-input" accept=".json,.txt,.lock,.xml" style="font-size:0.82rem;">
         </label>
         <button type="submit" class="fetch-btn" id="scan-btn">Scan dependencies</button>
         <button type="button" class="copy-btn" onclick="scanClear()">Clear</button>
@@ -1138,7 +1138,7 @@
     <div class="results" id="scan-results">
       <div class="status-placeholder">
         <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-        Upload a package-lock.json, requirements.txt, a list of npm name@version lines, or a list of Maven group:artifact:version coordinates to check every dependency against the malware database and for backported CVE remediation
+        Upload a package-lock.json, requirements.txt, a pom.xml, a list of npm name@version lines, or a list of Maven group:artifact:version coordinates to check every dependency against the malware database and for backported CVE remediation
       </div>
     </div>
   </div>
@@ -3902,12 +3902,16 @@ function scanExactPin(spec) {
   return m[1].endsWith('.*') ? '' : m[1];
 }
 
-// Dispatch on file shape: JSON → npm package-lock; [[package]] → poetry.lock;
-// coordinate lines → Maven GAV list; `name@version` lines → npm list;
-// otherwise → requirements.txt.
+// Dispatch on file shape: XML → Maven pom.xml; JSON → npm package-lock;
+// [[package]] → poetry.lock; coordinate lines → Maven GAV list;
+// `name@version` lines → npm list; otherwise → requirements.txt.
 // Returns { ecosystem, packages, ... } or { error }.
 function scanParse(text) {
   const trimmed = text.trim();
+  if (trimmed.startsWith('<')) {
+    if (!/<project[\s>]/.test(trimmed)) return { error: 'This XML does not look like a pom.xml (no <project> root).' };
+    return scanParsePom(trimmed);
+  }
   if (trimmed.startsWith('{')) {
     let obj;
     try { obj = JSON.parse(trimmed); } catch { return { error: 'That is not valid JSON.' }; }
@@ -3965,6 +3969,76 @@ function scanParseGav(text) {
   }
   if (!out.length) return { error: 'No Maven coordinates found — expected one "group:artifact:version" per line.' };
   return { ecosystem: 'maven', packages: out, skipped };
+}
+
+// pom.xml — a project file rather than a resolved lock, so it lists direct
+// dependencies and build plugins only. Versions can be `${property}` refs or
+// inherited from a parent POM / imported BOM; anything that doesn't resolve to
+// a literal is kept name-only and reported as unpinned.
+function scanParsePom(text) {
+  const doc = new DOMParser().parseFromString(text, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) return { error: 'That XML is not well formed.' };
+  const root = doc.documentElement;
+  if (!root || root.localName !== 'project') return { error: 'This XML does not look like a pom.xml (no <project> root).' };
+
+  const kid = (el, name) => [...el.children].find(c => c.localName === name) || null;
+  const txt = (el, name) => (kid(el, name)?.textContent || '').trim();
+
+  // <properties> plus the project coordinates a POM can refer to itself by.
+  // A parent POM supplies groupId/version when the child omits them.
+  const parent = kid(root, 'parent');
+  const props = new Map();
+  for (const p of [...(kid(root, 'properties')?.children || [])]) {
+    props.set(p.localName, (p.textContent || '').trim());
+  }
+  const selfGroup = txt(root, 'groupId') || (parent ? txt(parent, 'groupId') : '');
+  const selfVersion = txt(root, 'version') || (parent ? txt(parent, 'version') : '');
+  for (const [k, v] of [['project.groupId', selfGroup], ['project.version', selfVersion],
+                        ['project.artifactId', txt(root, 'artifactId')], ['version', selfVersion]]) {
+    if (v && !props.has(k)) props.set(k, v);
+  }
+  // Properties can reference other properties; a few passes settle the usual
+  // chains, and an unresolved ref leaves the version blank.
+  const resolve = (raw) => {
+    let v = raw;
+    for (let i = 0; i < 5 && v.includes('${'); i++) {
+      v = v.replace(/\$\{([^}]+)\}/g, (m, key) => props.get(key.trim()) ?? m);
+    }
+    return v.includes('${') ? '' : v;
+  };
+
+  const out = [];
+  const seen = new Set();
+  // Every <dependency> and <plugin> anywhere in the document, which picks up
+  // dependencyManagement, pluginManagement, and profile sections too.
+  const nodes = [];
+  (function walk(el) {
+    for (const c of el.children) {
+      if (c.localName === 'dependency' || c.localName === 'plugin') nodes.push(c);
+      walk(c);
+    }
+  })(root);
+  for (const el of nodes) {
+    const artifact = resolve(txt(el, 'artifactId'));
+    if (!artifact) continue;
+    // Maven's own plugins may omit the groupId.
+    const group = resolve(txt(el, 'groupId')) ||
+      (el.localName === 'plugin' ? 'org.apache.maven.plugins' : '');
+    if (!group) continue;
+    const version = resolve(txt(el, 'version'));
+    const scope = txt(el, 'scope');
+    const name = `${group}:${artifact}`;
+    const key = `${name}@${version}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ name, group, artifact, version, dev: scope === 'test' || scope === 'provided' });
+  }
+  if (!out.length) return { error: 'No dependencies or plugins found in that pom.xml.' };
+  return {
+    ecosystem: 'maven', packages: out, format: 'pom.xml',
+    unpinned: out.filter(p => !p.version).length,
+    rootName: txt(root, 'artifactId') || null,
+  };
 }
 
 // npm `name@version` lists — one per line, the shape `npm ls`, an SBOM export,
@@ -4499,7 +4573,7 @@ function scanClear() {
   _scanSourceName = null;
   document.getElementById('scan-results').innerHTML = `<div class="status-placeholder">
     <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#e2e8f0" stroke-width="1.5"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-    Upload a package-lock.json, requirements.txt, a list of npm name@version lines, or a list of Maven group:artifact:version coordinates to check every dependency against the malware database and for backported CVE remediation
+    Upload a package-lock.json, requirements.txt, a pom.xml, a list of npm name@version lines, or a list of Maven group:artifact:version coordinates to check every dependency against the malware database and for backported CVE remediation
   </div>`;
 }
 
@@ -4615,6 +4689,11 @@ document.getElementById('scan-form').addEventListener('submit', async (e) => {
       notes.push(`<div class="banner warn">Parsed a lockfileVersion 1 file — for the most complete transitive coverage, regenerate with a modern npm (lockfileVersion 3).</div>`);
     } else if (ecosystem === 'pypi' && parsed.unpinned > 0) {
       notes.push(`<div class="banner warn">${parsed.unpinned} of ${packages.length} requirement${parsed.unpinned !== 1 ? 's are' : ' is'} not pinned to an exact <code>==</code> version — those can only be checked for package-level malware history, not an exact-version hit. For a complete scan, use a fully pinned file (e.g. <code style="font-family:monospace;background:#fef3c7;padding:1px 4px;border-radius:3px">uv pip compile</code> output or <code style="font-family:monospace;background:#fef3c7;padding:1px 4px;border-radius:3px">pip freeze</code>).</div>`);
+    } else if (parsed.format === 'pom.xml') {
+      const unresolved = parsed.unpinned > 0
+        ? ` ${parsed.unpinned} of them carr${parsed.unpinned !== 1 ? 'y' : 'ies'} no literal version — inherited from a parent POM or an imported BOM — so those can only be checked for package-level malware history.`
+        : '';
+      notes.push(`<div class="banner warn">A <code>pom.xml</code> declares direct dependencies and plugins only; transitive dependencies are resolved at build time and are not in this scan.${unresolved} For the full resolved tree, run <code style="font-family:monospace;background:#fef3c7;padding:1px 4px;border-radius:3px">mvn dependency:list</code> and paste its <code>group:artifact:version</code> lines.</div>`);
     } else if (ecosystem === 'maven' && parsed.skipped > 0) {
       notes.push(`<div class="banner warn">Skipped ${parsed.skipped} line${parsed.skipped !== 1 ? 's' : ''} that did not parse as <code>group:artifact:version</code>.</div>`);
     }
