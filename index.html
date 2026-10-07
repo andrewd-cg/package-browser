@@ -1008,7 +1008,7 @@
   <!-- maven tab -->
   <div id="tab-maven" class="tab-pane">
     <form class="search-box" id="maven-form">
-      <input type="text" class="pkg-input" id="maven-input" placeholder="groupId:artifactId (e.g. org.apache.logging.log4j:log4j-core)" autocomplete="off" spellcheck="false" style="font-family:'SFMono-Regular',Consolas,monospace">
+      <input type="text" class="pkg-input" id="maven-input" placeholder="groupId:artifactId or groupId/artifactId (e.g. org.apache.logging.log4j:log4j-core)" autocomplete="off" spellcheck="false" style="font-family:'SFMono-Regular',Consolas,monospace">
       <button type="submit" class="fetch-btn" id="maven-btn">Fetch versions</button>
     </form>
     <div class="filter-row">
@@ -2751,8 +2751,9 @@ document.getElementById('maven-form').addEventListener('submit', async (e) => {
   e.preventDefault();
   const raw = document.getElementById('maven-input').value.trim();
   if (!raw) return;
-  const parts = raw.split(':');
-  if (parts.length !== 2 || !parts[0] || !parts[1]) {
+  // Accept either separator: groupId:artifactId or groupId/artifactId.
+  const parts = raw.split(/[:/]/);
+  if (parts.length !== 2 || !parts[0].trim() || !parts[1].trim()) {
     document.getElementById('maven-banners').innerHTML = `<div class="banner warn">Enter coordinates as groupId:artifactId — e.g. com.google.guava:guava</div>`;
     return;
   }
