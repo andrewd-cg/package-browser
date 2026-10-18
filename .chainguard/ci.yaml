@@ -1,0 +1,32 @@
+version: 1
+environment:
+  # server.js imports only Bun and Node builtins, so the VM needs nothing but
+  # the runtime. curl drives the smoke test; bash runs `bash -n`.
+  packages: [bun, bash, curl]
+checks:
+  # Resolve every import and parse server.js without running it. Catches a
+  # syntax error or a bad import before the smoke test spends time booting.
+  build:
+    cmd: [bun, build, server.js, --target, bun, --outdir, /var/tmp/build]
+
+  # Boot the server against an empty database and ask it for a page and an API
+  # response. The database is created on first run, so no fixture is needed.
+  smoke:
+    needs: [build]
+    timeout: 5m
+    script: |
+      MALWARE_DB_PATH=/var/tmp/smoke.db bun server.js &
+      server=$!
+      trap 'kill $server' EXIT
+      curl -fsS --retry 30 --retry-delay 1 --retry-connrefused \
+        http://127.0.0.1:3000/ -o /var/tmp/index.out
+      grep -q '<title>Package Browser</title>' /var/tmp/index.out
+      curl -fsS http://127.0.0.1:3000/api/cgr-malware/sources -o /var/tmp/sources.json
+      head -c 1 /var/tmp/sources.json | grep -q '\['
+
+  # Parse the shell scripts. Wolfi has no shellcheck package, so this catches
+  # syntax errors only.
+  shell:
+    cmd: [bash, -n, start.sh, check-malware.sh]
+    when:
+      changed: ["*.sh"]
