@@ -8,25 +8,62 @@ checks:
   # syntax error or a bad import before the smoke test spends time booting.
   build:
     cmd: [bun, build, server.js, --target, bun, --outdir, /var/tmp/build]
+    trigger: [presubmit, postsubmit]
 
-  # Boot the server against an empty database and ask it for a page and an API
-  # response. The database is created on first run, so no fixture is needed.
+  # index.html carries the whole frontend in one inline <script>, which nothing
+  # else parses. Pull the block out and bundle it to catch a syntax error.
+  frontend:
+    trigger: [presubmit, postsubmit]
+    when:
+      changed: ["index.html"]
+    script: |
+      start=$(grep -n '^<script>$' index.html | head -1 | cut -d: -f1)
+      end=$(grep -n '^</script>$' index.html | head -1 | cut -d: -f1)
+      if [ -z "$start" ] || [ -z "$end" ] || [ "$end" -le "$start" ]; then
+        echo "::error file=index.html::no inline <script> block found"
+        exit 1
+      fi
+      sed -n "$((start + 1)),$((end - 1))p" index.html > /var/tmp/inline.js
+      bun build /var/tmp/inline.js --target browser --outdir /var/tmp/frontend
+
+  # Boot the server against an empty database and walk every route it serves.
+  # The database is created on first run, so no fixture is needed.
   smoke:
     needs: [build]
     timeout: 5m
+    trigger: [presubmit, postsubmit]
     script: |
       MALWARE_DB_PATH=/var/tmp/smoke.db bun server.js &
       server=$!
-      trap 'kill $server' EXIT
+      # `|| true` so a server that already exited doesn't mask the real result:
+      # the trap's status becomes the script's.
+      trap 'kill $server 2>/dev/null || true' EXIT
+
       curl -fsS --retry 30 --retry-delay 1 --retry-connrefused \
         http://127.0.0.1:3000/ -o /var/tmp/index.out
       grep -q '<title>Package Browser</title>' /var/tmp/index.out
-      curl -fsS http://127.0.0.1:3000/api/cgr-malware/sources -o /var/tmp/sources.json
-      head -c 1 /var/tmp/sources.json | grep -q '\['
+
+      # Every literal route, straight from the source, so a new one is covered
+      # the day it lands. A handler that throws returns 500; 400 and 404 are
+      # fine, since most routes want query parameters or a POST.
+      grep -oE "url\.pathname === '[^']+'" server.js | cut -d"'" -f2 | sort -u > /var/tmp/routes
+      failed=0
+      while read -r path; do
+        # /readyz answers 503 until the malware mirror is warm, which it never
+        # is here: an empty database is the point of this check.
+        if [ "$path" = "/readyz" ]; then continue; fi
+        code=$(curl -s -m 30 -o /var/tmp/body -w '%{http_code}' "http://127.0.0.1:3000$path")
+        case "$code" in
+          5*) echo "::error file=server.js::$path returned $code"; failed=1 ;;
+        esac
+      done < /var/tmp/routes
+      echo "checked $(wc -l < /var/tmp/routes) routes"
+      exit $failed
 
   # Parse the shell scripts. Wolfi has no shellcheck package, so this catches
   # syntax errors only.
   shell:
     cmd: [bash, -n, start.sh, check-malware.sh]
+    trigger: [presubmit, postsubmit]
     when:
       changed: ["*.sh"]
