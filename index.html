@@ -1285,6 +1285,7 @@
         <button class="mal-source-chip" data-eco="pypi">PyPI</button>
         <button class="mal-source-chip" data-eco="maven">Maven</button>
         <button class="mal-source-chip" data-eco="npm">npm</button>
+        <button class="mal-source-chip" data-eco="golang">Go</button>
       </div>
       <span style="flex:1"></span>
       <input type="text" id="vex-search" placeholder="Search package name or CVE / GHSA…" style="min-width:260px; flex:1; max-width:420px;">
@@ -5463,7 +5464,7 @@ const vexBrowseState = { page: 0, pageSize: 100, total: 0, eco: '', month: '', d
 let _vexTimer = null;
 let _vexStatusLoaded = false;
 
-const VEX_ECO_LABELS = { pypi: 'PyPI', maven: 'Maven', npm: 'npm' };
+const VEX_ECO_LABELS = { pypi: 'PyPI', maven: 'Maven', npm: 'npm', golang: 'Go' };
 
 function vexPkgLink(pkg, eco) {
   if (eco === 'pypi') return `https://pypi.org/project/${encodeURIComponent(pkg)}/`;
@@ -5472,6 +5473,8 @@ function vexPkgLink(pkg, eco) {
   // The vex table stores maven names as `group/artifact` (the feed's doc-id form),
   // but callers elsewhere write `group:artifact` — accept either separator.
   if (eco === 'maven') { const [g, a] = pkg.split(/[/:]/); return `https://central.sonatype.com/artifact/${encodeURIComponent(g || pkg)}/${encodeURIComponent(a || '')}`; }
+  // Module paths carry their own slashes, which pkg.go.dev wants left intact.
+  if (eco === 'golang') return `https://pkg.go.dev/${pkg.split('/').map(encodeURIComponent).join('/')}`;
   return '#';
 }
 function vexAdvisoryLink(id) {
@@ -5637,6 +5640,7 @@ const VEX_CHART_ECOS = [
   { key: 'maven', label: 'Maven', color: '#3b82f6' },
   { key: 'pypi',  label: 'PyPI',  color: '#22c55e' },
   { key: 'npm',   label: 'npm',   color: '#ef4444' },
+  { key: 'golang', label: 'Go',   color: '#06b6d4' },
 ];
 
 // Every day of a 'YYYY-MM' month, as 'YYYY-MM-DD' keys.

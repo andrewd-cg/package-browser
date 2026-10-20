@@ -1241,7 +1241,7 @@ const VEX_BASE = 'https://libraries.cgr.dev/openvex/v1';
 // Ecosystems the feed publishes. It started as pypi + maven and gained npm in
 // August 2026, so this is one list rather than a condition repeated per call
 // site — the next addition should only need this line and a UI chip.
-const VEX_ECOSYSTEMS = ['pypi', 'maven', 'npm'];
+const VEX_ECOSYSTEMS = ['pypi', 'maven', 'npm', 'golang'];
 const VEX_INDEX_TTL_MS = 60 * 60 * 1000; // 1h — only used for the cold/live path
 let vexIndexCache = { ids: null, fetchedAt: 0 }; // Set<string> of entry ids
 let vexWarm = db.prepare(`SELECT COUNT(*) AS n FROM vex`).get().n > 0;
@@ -1280,8 +1280,8 @@ function vexBaseVersion(v) {
 }
 
 // Package name in the form the feed — and the `vex` table — uses: PEP 503 for
-// pypi, `group/artifact` for maven, verbatim for npm. null for any ecosystem the
-// feed doesn't publish. Maven doc ids are `maven/<group>/<artifact>`, so the
+// pypi, `group/artifact` for maven, verbatim for npm and for golang module
+// paths. null for any ecosystem the feed doesn't publish. Maven doc ids are `maven/<group>/<artifact>`, so the
 // stored name keeps that slash even though coordinates are written
 // `group:artifact`; callers may pass either separator.
 // npm is deliberately not case-folded: the sync stores whatever the doc id says
@@ -1291,6 +1291,7 @@ function vexNormPkg(eco, pkg) {
   if (eco === 'pypi')  return pep503(pkg);
   if (eco === 'maven') return pkg.replace(':', '/');
   if (eco === 'npm')   return pkg;
+  if (eco === 'golang') return pkg; // module path, verbatim
   return null;
 }
 
