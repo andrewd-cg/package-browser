@@ -117,6 +117,20 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_malware_eco_pub   ON malware(ecosystem, published_at);
   CREATE INDEX IF NOT EXISTS idx_malware_src_pub   ON malware(source, published_at);
   CREATE INDEX IF NOT EXISTS idx_malware_eco_blk   ON malware(ecosystem, blocked_at DESC);
+  CREATE INDEX IF NOT EXISTS idx_malware_malid     ON malware(malid);
+  CREATE INDEX IF NOT EXISTS idx_malware_pkg_src   ON malware(package_name, ecosystem, source);
+`);
+
+// When OSV published each MAL advisory. The blocklist row carries the MAL id but
+// not its publication date, so "did we find this before it had a MAL id?" needs
+// one lookup per advisory, cached here. 'NOT_FOUND'/'ERROR' are sentinels, same
+// convention as malware.published_at, so a failed lookup isn't retried forever.
+db.exec(`
+  CREATE TABLE IF NOT EXISTS mal_published (
+    malid      TEXT PRIMARY KEY,
+    published  TEXT NOT NULL,
+    fetched_at TEXT NOT NULL
+  );
 `);
 
 const insertMalware = db.prepare(`
@@ -318,6 +332,72 @@ async function runMalwareEnrich() {
   } finally {
     enrichState.running = false;
     enrichState.finishedAt = new Date().toISOString();
+  }
+}
+
+// ── MAL advisory publication dates (OSV) ─────────────────────────────────────
+// Only advisories that can decide a race are fetched: a MAL id matters here when
+// the same package also carries a block we raised ourselves. That keeps the pass
+// at a few tens of thousands of lookups instead of every MAL id in the mirror.
+const malPubState = { running: false, done: 0, total: 0, failed: 0, error: null, startedAt: null, finishedAt: null };
+
+function malPublishedPending() {
+  return db.prepare(`
+    SELECT DISTINCT m.malid FROM malware m
+    WHERE m.malid LIKE 'MAL-%'
+      AND NOT EXISTS (SELECT 1 FROM mal_published p WHERE p.malid = m.malid AND p.published <> 'ERROR')
+      AND EXISTS (
+        SELECT 1 FROM malware o
+        WHERE o.package_name = m.package_name AND o.ecosystem = m.ecosystem AND o.source <> 'osv'
+      )
+  `).all().map(r => r.malid);
+}
+
+function malPublishedCounts() {
+  const row = db.prepare(`
+    SELECT
+      COUNT(*) AS known,
+      COUNT(CASE WHEN published NOT IN ('NOT_FOUND','ERROR') THEN 1 END) AS dated
+    FROM mal_published
+  `).get();
+  return { ...row, pending: malPublishedPending().length };
+}
+
+async function runMalPublishedSync() {
+  if (malPubState.running) throw new Error('MAL publication sync already in progress');
+  Object.assign(malPubState, { running: true, done: 0, total: 0, failed: 0, error: null, startedAt: new Date().toISOString(), finishedAt: null });
+
+  try {
+    const pending = malPublishedPending();
+    malPubState.total = pending.length;
+
+    const upsert = db.prepare(`INSERT OR REPLACE INTO mal_published (malid, published, fetched_at) VALUES (?, ?, ?)`);
+    const BATCH = 40;
+    for (let i = 0; i < pending.length; i += BATCH) {
+      const batch = pending.slice(i, i + BATCH);
+      const results = await Promise.all(batch.map(async malid => {
+        try {
+          const res = await fetch(`${OSV_API_BASE}/${encodeURIComponent(malid)}`);
+          if (res.status === 404) return [malid, 'NOT_FOUND'];
+          if (!res.ok) throw new Error(`OSV ${res.status}`);
+          const published = (await res.json())?.published;
+          return [malid, published || 'NOT_FOUND'];
+        } catch {
+          malPubState.failed++;
+          return [malid, 'ERROR'];
+        }
+      }));
+      const now = new Date().toISOString();
+      db.transaction(() => { for (const [malid, published] of results) upsert.run(malid, published, now); })();
+      malPubState.done += batch.length;
+      await new Promise(r => setTimeout(r, 0));
+    }
+  } catch (err) {
+    malPubState.error = err.message;
+    throw err;
+  } finally {
+    malPubState.running = false;
+    malPubState.finishedAt = new Date().toISOString();
   }
 }
 
@@ -1171,8 +1251,12 @@ async function runMalwareSync({ token, full = false }) {
     // Always fetch publish dates after a sync — the enrich pass only touches rows
     // with published_at IS NULL, so this is a no-op once everything is enriched.
     // Fire-and-forget; progress is exposed via /api/cgr-malware/enrich/status.
+    // MAL publication dates are chained after it for the same reason: only the
+    // advisories a sync newly introduced are fetched.
     if (!syncState.cancelled && !enrichState.running) {
-      runMalwareEnrich().catch(err => console.error('[malware-sync] auto-enrich failed:', err.message));
+      runMalwareEnrich()
+        .then(() => malPubState.running ? null : runMalPublishedSync())
+        .catch(err => console.error('[malware-sync] auto-enrich failed:', err.message));
     }
   } catch (err) {
     syncState.error = err.message;
@@ -2238,6 +2322,134 @@ Bun.serve({
         FROM malware
       `).get();
       return new Response(JSON.stringify({ ...counts, enrichState: { ...enrichState } }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    // MAL publication-date fetch (fire-and-forget) + its status.
+    if (url.pathname === '/api/cgr-malware/mal-dates' && req.method === 'POST') {
+      if (malPubState.running) {
+        return new Response(JSON.stringify({ error: 'MAL date fetch already in progress', state: malPubState }), { status: 409, headers: { 'Content-Type': 'application/json' } });
+      }
+      runMalPublishedSync().catch(() => {});
+      return new Response(JSON.stringify({ started: true, state: malPubState }), { status: 202, headers: { 'Content-Type': 'application/json' } });
+    }
+    if (url.pathname === '/api/cgr-malware/mal-dates/status') {
+      return new Response(JSON.stringify({ ...malPublishedCounts(), state: { ...malPubState } }), { headers: { 'Content-Type': 'application/json' } });
+    }
+
+    // Who found it first: per package, our earliest block against the earliest
+    // MAL advisory covering it. Shares the filter shape of /stats and /search.
+    if (url.pathname === '/api/cgr-malware/first-finder' || url.pathname === '/api/cgr-malware/first-finder/packages') {
+      const wantPackages = url.pathname.endsWith('/packages');
+      const cacheKey = url.pathname + url.search;
+      const cached = wantPackages ? null : statsCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return new Response(cached.result, { headers: { 'Content-Type': 'application/json', 'X-Cache': 'HIT' } });
+      }
+
+      const eco    = url.searchParams.get('eco')    || '';
+      const source = url.searchParams.get('source') || '';
+      const since  = url.searchParams.get('since')  || '';
+      const until  = url.searchParams.get('until')  || '';
+      const pub_since = url.searchParams.get('pub_since') || '';
+      const pub_until = url.searchParams.get('pub_until') || '';
+
+      // Our side of the race: every block the filters select that we didn't take
+      // from OSV. A source chip narrows it further — pick 'chainguard' and the
+      // question becomes "did our own analysis beat the MAL id?".
+      const where = [`source <> 'osv'`];
+      const args = [];
+      if (eco)    { where.push('ecosystem = ?');   args.push(eco); }
+      if (source) { where.push('source = ?');      args.push(source); }
+      if (since)  { where.push('blocked_at >= ?'); args.push(since); }
+      if (until)  { where.push('blocked_at <  ?'); args.push(until); }
+      if (pub_since || pub_until) {
+        where.push(`published_at IS NOT NULL AND published_at NOT IN ('NOT_FOUND','ERROR')`);
+        if (pub_since) { where.push('published_at >= ?'); args.push(pub_since); }
+        if (pub_until) { where.push('published_at <  ?'); args.push(pub_until); }
+      }
+
+      // The advisory side is deliberately unfiltered beyond the ecosystem: when a
+      // MAL id was published is a fact about the package, not about the rows the
+      // date and source chips happen to select.
+      const malWhere = eco ? `AND m.ecosystem = ?` : '';
+      const malArgs = eco ? [eco] : [];
+
+      // Blocks placed before the blocklist existed are seeded from OSV's history,
+      // so an advisory older than our first self-raised block was never raceable.
+      // Derived rather than hard-coded so it tracks the data.
+      const epoch = db.prepare(`SELECT MIN(blocked_at) AS m FROM malware WHERE source <> 'osv'`).get().m || '';
+
+      const CTES = `
+        WITH ours AS (
+          SELECT ecosystem, package_name, MIN(blocked_at) AS first_block
+          FROM malware WHERE ${where.join(' AND ')} GROUP BY 1, 2
+        ),
+        mal AS (
+          SELECT m.ecosystem, m.package_name,
+                 MIN(CASE WHEN p.published NOT IN ('NOT_FOUND','ERROR') THEN p.published END) AS first_mal,
+                 MIN(CASE WHEN p.published NOT IN ('NOT_FOUND','ERROR') THEN p.malid END) AS first_malid
+          FROM malware m LEFT JOIN mal_published p ON p.malid = m.malid
+          WHERE m.malid LIKE 'MAL-%' ${malWhere} GROUP BY 1, 2
+        ),
+        race AS (
+          SELECT ours.ecosystem, ours.package_name, first_block, first_mal, first_malid,
+            CASE
+              WHEN mal.package_name IS NULL THEN 'no_mal_id'
+              WHEN first_mal IS NULL        THEN 'unknown'
+              WHEN first_mal < ?            THEN 'pre_blocklist'
+              WHEN first_block < first_mal  THEN 'ours_first'
+              ELSE 'mal_first'
+            END AS verdict
+          FROM ours LEFT JOIN mal USING (ecosystem, package_name)
+        )`;
+      const raceArgs = [...args, ...malArgs, epoch];
+
+      if (wantPackages) {
+        const verdict = url.searchParams.get('verdict') || '';
+        const limit  = Math.min(parseInt(url.searchParams.get('limit') || '100', 10) || 100, 1000);
+        const offset = parseInt(url.searchParams.get('offset') || '0', 10) || 0;
+        const vWhere = verdict ? `WHERE verdict = ?` : '';
+        const vArgs = verdict ? [verdict] : [];
+        const total = db.prepare(`${CTES} SELECT COUNT(*) AS n FROM race ${vWhere}`).get(...raceArgs, ...vArgs).n;
+        // Widest margin first: the long leads are the interesting end of either list.
+        const rows = db.prepare(`${CTES}
+          SELECT *, (julianday(first_mal) - julianday(first_block)) * 86400.0 AS margin_s
+          FROM race ${vWhere}
+          ORDER BY margin_s IS NULL, abs(COALESCE(margin_s, 0)) DESC, first_block DESC
+          LIMIT ? OFFSET ?`).all(...raceArgs, ...vArgs, limit, offset);
+        return new Response(JSON.stringify({ total, rows, limit, offset }), { headers: { 'Content-Type': 'application/json' } });
+      }
+
+      const byVerdict = db.prepare(`${CTES} SELECT verdict, COUNT(*) AS n FROM race GROUP BY 1`).all(...raceArgs);
+      const byEcoRows = db.prepare(`${CTES} SELECT ecosystem, verdict, COUNT(*) AS n FROM race GROUP BY 1, 2`).all(...raceArgs);
+      const margins = db.prepare(`${CTES}
+        SELECT verdict, AVG(julianday(first_mal) - julianday(first_block)) * 86400.0 AS mean_s
+        FROM race WHERE verdict IN ('ours_first','mal_first') GROUP BY 1`).all(...raceArgs);
+
+      const blank = () => ({ ours_first: 0, mal_first: 0, no_mal_id: 0, pre_blocklist: 0, unknown: 0 });
+      const overall = blank();
+      for (const r of byVerdict) overall[r.verdict] = r.n;
+      const ecoMap = {};
+      for (const r of byEcoRows) {
+        if (!ecoMap[r.ecosystem]) ecoMap[r.ecosystem] = { ecosystem: r.ecosystem, ...blank() };
+        ecoMap[r.ecosystem][r.verdict] = r.n;
+      }
+      const withPct = (o) => {
+        const raced = o.ours_first + o.mal_first;
+        return { ...o, packages: o.ours_first + o.mal_first + o.no_mal_id + o.pre_blocklist + o.unknown,
+                 raced, pct_ours_first: raced ? Math.round(1000 * o.ours_first / raced) / 10 : null };
+      };
+
+      const body = JSON.stringify({
+        overall: withPct(overall),
+        byEco: Object.values(ecoMap).map(withPct).sort((a, b) => b.packages - a.packages),
+        meanLead_s: margins.find(m => m.verdict === 'ours_first')?.mean_s ?? null,
+        meanLag_s:  margins.find(m => m.verdict === 'mal_first')?.mean_s ?? null,
+        epoch,
+        malDates: { ...malPublishedCounts(), running: malPubState.running },
+      });
+      statsCache.set(cacheKey, { result: body, expiresAt: Date.now() + STATS_TTL });
+      return new Response(body, { headers: { 'Content-Type': 'application/json' } });
     }
 
     // Detection lag statistics (TTL-cached for 30s per unique param string).

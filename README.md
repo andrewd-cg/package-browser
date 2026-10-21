@@ -76,6 +76,7 @@ The malware tab caches Chainguard's malicious-package dataset locally to SQLite 
 - **Source filter** — defaults to `chainguard` (Sentinel detections, ~3.5k rows). Switch to **All sources** to also include OSV advisories (the bulk of the dataset) and manually curated entries.
 - **Timeline chart** — bars per UTC day, click any bar to set both date filters to that day. The axis adapts to the range (daily labels for ≤14 days, every-other-day for ≤30, weekly for ≤60, monthly otherwise). The `max:` label in the top-left shows the peak count.
 - **Reason filter** — facet dropdown populated from the cache. Individual `MAL-YYYY-N` advisory IDs are collapsed into one `MAL-ID*` bucket; selecting it filters to any row tagged with any MAL advisory.
+- **Who found it first** — per package, the earliest block we raised against the earliest MAL advisory OSV published for the same package. Reads the same filter chips as the lag stats, so the source chips decide which side "we" means: **Sentinel** asks whether Chainguard's own analysis beat the advisory, **All sources** counts every block that didn't come from OSV. Packages split four ways — blocked first, MAL ID first, no MAL ID in OSV at all, and advisories older than our oldest self-raised block (seeded from OSV's history, so never a race, and excluded from the percentage). Click any cell to list the packages with the margin per row. Advisory publication dates come from OSV, one lookup per MAL ID, fetched automatically after each sync and cached in `mal_published`.
 
 The cache uses the existing `javascript` Chainguard pull-token (Basic auth) — there's no separate auth setup. Auth is tested on page load (red dot on the gear icon if anything fails).
 
@@ -98,6 +99,8 @@ Browser → GET  /api/cgr-malware/search?...         → server.js (local DB; fi
 Browser → GET  /api/cgr-malware/histogram?...      → server.js (local DB; per-day GROUP BY)
 Browser → GET  /api/cgr-malware/reasons            → server.js (local DB; distinct reasons + counts)
 Browser → GET  /api/cgr-malware/check?package=...  → server.js (local DB; used by npm tab to badge versions)
+Browser → GET  /api/cgr-malware/first-finder?...   → server.js (local DB; our block vs the MAL advisory, per package)
+Browser → POST /api/cgr-malware/mal-dates          → server.js → api.osv.dev/v1/vulns/<MAL-id> (public; publication dates)
 
 Browser → GET registry.npmjs.org/<pkg>             (direct, CORS supported)
 Browser → GET pypi.org/pypi/<pkg>/json             (direct, CORS supported)

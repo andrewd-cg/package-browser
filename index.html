@@ -114,6 +114,19 @@
   /* "of N package-versions" needs more room than a bare stat value. */
   .lag-stat-cell.lsc-wide { flex:1.4; min-width:132px; }
   .lag-chart-wrap { background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:1rem; margin-bottom:1rem; }
+  /* "who found it first" — the race between our block and the MAL advisory */
+  .lag-firsts { background:#fff; border:1px solid #e2e8f0; border-radius:8px; overflow:hidden; margin-bottom:1rem; }
+  .lag-firsts .lag-stat-grid { margin:0; border:none; border-radius:0; border-bottom:1px solid #e2e8f0; }
+  .ff-click { cursor:pointer; transition:background 0.12s; }
+  .ff-click:hover { background:#f8fafc; }
+  .ff-click.active { background:#eef2ff; box-shadow:inset 0 -2px 0 #4338ca; }
+  .ff-eco-table { width:100%; font-size:0.8rem; border-collapse:collapse; }
+  .ff-eco-table th, .ff-eco-table td { padding:0.35rem 1rem; text-align:right; }
+  .ff-eco-table th:first-child, .ff-eco-table td:first-child { text-align:left; }
+  .ff-eco-table th { font-size:0.68rem; color:#94a3b8; text-transform:uppercase; letter-spacing:0.05em; font-weight:600; border-bottom:1px solid #e2e8f0; }
+  .ff-eco-table tbody tr:hover { background:#f8fafc; }
+  .ff-bar { display:inline-block; height:7px; border-radius:4px; background:#16a34a; vertical-align:middle; }
+  .ff-bar-rest { display:inline-block; height:7px; border-radius:4px; background:#e2e8f0; vertical-align:middle; }
   .vex-chart-wrap { background:#fff; border:1px solid #e2e8f0; border-radius:8px; padding:0.75rem 1rem; margin-bottom:0.75rem; }
   .vex-chart-wrap rect { transition: opacity 0.1s; }
   .vex-chart-wrap rect:hover { opacity: 0.7; }
@@ -1235,6 +1248,66 @@
       <div class="lag-stat-cell"><div class="lsc-label">Within 12h</div><div class="lsc-value good" id="lsc-12h">—</div></div>
       <div class="lag-stat-cell"><div class="lsc-label">Within 24h</div><div class="lsc-value good" id="lsc-24h">—</div></div>
       <div class="lag-stat-cell"><div class="lsc-label">Within 7d</div><div class="lsc-value good" id="lsc-7d">—</div></div>
+    </div>
+    <!-- who found it first: our block vs the MAL advisory that covers the same package -->
+    <div class="lag-firsts" id="lag-firsts">
+      <div class="lag-drilldown-header">
+        <span>Who found it first</span>
+        <span id="ff-scope" style="font-weight:normal;color:#94a3b8;font-size:0.78rem;"></span>
+        <span style="flex:1"></span>
+        <span id="ff-dates-note" style="font-weight:normal;color:#94a3b8;font-size:0.75rem;"></span>
+        <button type="button" class="copy-btn" id="ff-fetch-btn" style="display:none;"
+          title="Look up each MAL advisory's publication date from OSV. Runs automatically after every sync.">Fetch MAL dates</button>
+      </div>
+      <div class="mal-bar" id="ff-progress" style="display:none;">
+        <span style="font-size:0.82rem;color:#64748b;">Fetching MAL publication dates…</span>
+        <div class="mal-progress" style="flex:1;"><div id="ff-progress-fill" style="width:0%"></div></div>
+        <span class="mal-stat" id="ff-progress-count"></span>
+      </div>
+      <div class="lag-stat-grid">
+        <div class="lag-stat-cell lsc-wide"
+          data-tip="Our side of the race is every block in scope that didn't come from OSV; the source chips narrow it further, so picking Sentinel asks whether our own analysis beat the advisory. Of those packages that OSV also has a MAL advisory for, this is the share we blocked before the advisory was published.">
+          <div class="lsc-label">We found it first</div>
+          <div class="lsc-value good" id="ff-pct">—</div>
+          <div class="lsc-sub" id="ff-pct-sub"></div>
+        </div>
+        <div class="lag-stat-cell ff-click" data-verdict="ours_first" data-tip="Blocked before the MAL advisory existed. Click to list them.">
+          <div class="lsc-label">Blocked first</div>
+          <div class="lsc-value" id="ff-ours">—</div>
+          <div class="lsc-sub" id="ff-ours-sub"></div>
+        </div>
+        <div class="lag-stat-cell ff-click" data-verdict="mal_first" data-tip="A MAL advisory was published before our block. Click to list them.">
+          <div class="lsc-label">MAL ID first</div>
+          <div class="lsc-value" id="ff-mal">—</div>
+          <div class="lsc-sub" id="ff-mal-sub"></div>
+        </div>
+        <div class="lag-stat-cell ff-click" data-verdict="no_mal_id" data-tip="We blocked these and OSV still carries no MAL advisory for the package — no race to lose. Click to list them.">
+          <div class="lsc-label">No MAL ID</div>
+          <div class="lsc-value" id="ff-none">—</div>
+          <div class="lsc-sub" id="ff-none-sub"></div>
+        </div>
+        <div class="lag-stat-cell ff-click" data-verdict="pre_blocklist"
+          data-tip="The advisory predates the oldest block we raised ourselves, so these were never a race — the blocklist inherited them. Excluded from the percentage.">
+          <div class="lsc-label">Pre-blocklist</div>
+          <div class="lsc-value" style="color:#94a3b8;" id="ff-pre">—</div>
+          <div class="lsc-sub">not raceable</div>
+        </div>
+      </div>
+      <div style="overflow-x:auto;"><table class="ff-eco-table" id="ff-eco-table"></table></div>
+      <div id="ff-drilldown" style="display:none; border-top:1px solid #e2e8f0;">
+        <div class="lag-drilldown-header">
+          <span id="ff-dd-title">Packages</span>
+          <span style="flex:1"></span>
+          <span id="ff-dd-count" style="font-weight:normal;color:#94a3b8;font-size:0.78rem;"></span>
+          <button type="button" class="copy-btn" id="ff-dd-close" style="margin-left:0.5rem;">✕ Close</button>
+        </div>
+        <div id="ff-dd-results" style="overflow-x:auto;"></div>
+        <div class="mal-bar" style="padding:0.5rem 1rem; border-top:1px solid #e2e8f0;">
+          <button type="button" class="copy-btn" id="ff-dd-prev" disabled>← Prev</button>
+          <span id="ff-dd-page-info" style="font-size:0.8rem;color:#94a3b8;">—</span>
+          <button type="button" class="copy-btn" id="ff-dd-next" disabled>Next →</button>
+        </div>
+      </div>
     </div>
     <!-- big histogram -->
     <div class="lag-chart-wrap">
@@ -5281,6 +5354,168 @@ async function lagLoadDrillDown() {
   document.getElementById('lag-drilldown').style.display = 'block';
 }
 
+// ── Who found it first ───────────────────────────────────────────────────────
+// Package-level race: our earliest block against the earliest MAL advisory OSV
+// published for the same package. Reads the same filter chips as the lag stats,
+// so a source chip changes which side "we" means (pick Chainguard and it's our
+// own analysis against OSV).
+const FF_VERDICT_LABELS = {
+  ours_first:    'blocked before the MAL ID',
+  mal_first:     'MAL ID published first',
+  no_mal_id:     'blocked with no MAL ID in OSV',
+  pre_blocklist: 'advisory predates the blocklist',
+  unknown:       'MAL publication date not fetched yet',
+};
+const ffDDState = { verdict: null, page: 0, pageSize: 100, total: 0 };
+let _ffAbort = null;
+
+async function ffLoadStats() {
+  if (_ffAbort) _ffAbort.abort();
+  _ffAbort = new AbortController();
+  const { signal } = _ffAbort;
+
+  let data;
+  try {
+    data = await fetch(`/api/cgr-malware/first-finder?${lagBuildStatsParams()}`, { signal }).then(r => r.json());
+  } catch { return; }
+  if (signal.aborted) return;
+
+  const o = data.overall;
+  const setText = (id, v) => { document.getElementById(id).textContent = v; };
+
+  setText('ff-pct', o.pct_ours_first != null ? `${o.pct_ours_first}%` : '—');
+  setText('ff-pct-sub', o.raced ? `of ${o.raced.toLocaleString()} packages with a MAL ID` : 'no package in scope has a MAL ID');
+  setText('ff-ours', o.ours_first.toLocaleString());
+  setText('ff-mal', o.mal_first.toLocaleString());
+  setText('ff-none', o.no_mal_id.toLocaleString());
+  setText('ff-pre', o.pre_blocklist.toLocaleString());
+  setText('ff-ours-sub', data.meanLead_s ? `${malFmtLag(data.meanLead_s)} ahead on average` : '');
+  setText('ff-mal-sub', data.meanLag_s ? `${malFmtLag(Math.abs(data.meanLag_s))} behind on average` : '');
+  setText('ff-none-sub', o.packages ? `${Math.round(100 * o.no_mal_id / o.packages)}% of packages in scope` : '');
+  setText('ff-scope', o.packages
+    ? `· ${o.packages.toLocaleString()} packages we blocked${o.unknown ? ` · ${o.unknown.toLocaleString()} undated advisories` : ''}`
+    : '· nothing in scope');
+
+  // The MAL dates are fetched per advisory; say so while the set is incomplete
+  // rather than silently reporting a race from a partial sample.
+  const md = data.malDates || {};
+  const noteEl = document.getElementById('ff-dates-note');
+  const btn = document.getElementById('ff-fetch-btn');
+  noteEl.textContent = md.pending
+    ? `${md.pending.toLocaleString()} advisories still undated`
+    : `${(md.dated || 0).toLocaleString()} advisory dates known`;
+  btn.style.display = md.pending && !md.running ? '' : 'none';
+  if (md.running) ffAttachDatePolling();
+
+  const rows = data.byEco.map(e => {
+    const pct = e.pct_ours_first;
+    const barW = pct == null ? 0 : Math.round(pct * 0.6);
+    return `<tr>
+      <td>${escHtml(e.ecosystem)}</td>
+      <td>${e.packages.toLocaleString()}</td>
+      <td style="font-weight:600;">${e.ours_first.toLocaleString()}</td>
+      <td>${e.mal_first.toLocaleString()}</td>
+      <td>${e.no_mal_id.toLocaleString()}</td>
+      <td style="color:#94a3b8;">${e.pre_blocklist.toLocaleString()}</td>
+      <td style="white-space:nowrap;">${pct == null ? '—' : `${pct}%`}
+        <span class="ff-bar" style="width:${barW}px;"></span><span class="ff-bar-rest" style="width:${60 - barW}px;"></span></td>
+    </tr>`;
+  }).join('');
+  document.getElementById('ff-eco-table').innerHTML = `
+    <thead><tr>
+      <th>Ecosystem</th><th>Blocked by us</th><th>Blocked first</th><th>MAL ID first</th>
+      <th>No MAL ID</th><th>Pre-blocklist</th><th>We found it first</th>
+    </tr></thead><tbody>${rows || '<tr><td colspan="7" style="color:#94a3b8;">No packages match these filters</td></tr>'}</tbody>`;
+
+  if (ffDDState.verdict) ffLoadPackages();
+}
+
+async function ffLoadPackages() {
+  const { verdict, page, pageSize } = ffDDState;
+  const p = lagBuildStatsParams();
+  p.set('verdict', verdict);
+  p.set('limit', pageSize);
+  p.set('offset', page * pageSize);
+
+  const res = await fetch(`/api/cgr-malware/first-finder/packages?${p}`).then(r => r.json());
+  ffDDState.total = res.total;
+
+  document.getElementById('ff-dd-title').textContent = `Packages ${FF_VERDICT_LABELS[verdict] || verdict}`;
+  document.getElementById('ff-dd-count').textContent = `${res.total.toLocaleString()} packages`;
+  const start = res.offset + 1, end = Math.min(res.offset + res.rows.length, res.total);
+  document.getElementById('ff-dd-page-info').textContent = res.total === 0 ? '—' : `${start.toLocaleString()}–${end.toLocaleString()}`;
+  document.getElementById('ff-dd-prev').disabled = page === 0;
+  document.getElementById('ff-dd-next').disabled = end >= res.total;
+
+  const tbody = res.rows.map(r => {
+    const margin = r.margin_s == null ? '—'
+      : `${malFmtLag(Math.abs(r.margin_s))} ${r.margin_s >= 0 ? 'ahead' : 'behind'}`;
+    return `<tr>
+      <td><a href="${escHtml(malPkgLink(r.package_name, r.ecosystem))}" target="_blank" rel="noopener" style="font-family:monospace;font-size:0.8rem;">${escHtml(r.package_name)}</a></td>
+      <td style="font-size:0.78rem;">${escHtml(r.ecosystem)}</td>
+      <td style="font-size:0.78rem;white-space:nowrap;" title="${escHtml(r.first_block || '')}">${escHtml(malFmtDate(r.first_block))}</td>
+      <td style="font-size:0.78rem;white-space:nowrap;">${malIdCell(r.first_malid) || '—'}</td>
+      <td style="font-size:0.78rem;white-space:nowrap;" title="${escHtml(r.first_mal || '')}">${r.first_mal ? escHtml(malFmtDate(r.first_mal)) : '—'}</td>
+      <td style="font-size:0.78rem;font-weight:600;white-space:nowrap;color:${r.margin_s >= 0 ? '#16a34a' : '#dc2626'};">${escHtml(margin)}</td>
+    </tr>`;
+  }).join('');
+  document.getElementById('ff-dd-results').innerHTML = `<table style="width:100%;">
+    <thead><tr><th>Package</th><th>Ecosystem</th><th>We blocked</th><th>Advisory</th><th>MAL published</th><th>Margin</th></tr></thead>
+    <tbody>${tbody}</tbody></table>`;
+  document.getElementById('ff-drilldown').style.display = 'block';
+}
+
+function ffCloseDrilldown() {
+  ffDDState.verdict = null;
+  document.getElementById('ff-drilldown').style.display = 'none';
+  for (const c of document.querySelectorAll('#lag-firsts .ff-click')) c.classList.remove('active');
+}
+
+document.getElementById('lag-firsts').addEventListener('click', function(e) {
+  const cell = e.target.closest('.ff-click');
+  if (!cell) return;
+  const verdict = cell.dataset.verdict;
+  if (verdict === ffDDState.verdict) { ffCloseDrilldown(); return; }
+  ffDDState.verdict = verdict;
+  ffDDState.page = 0;
+  for (const c of this.querySelectorAll('.ff-click')) c.classList.toggle('active', c === cell);
+  ffLoadPackages();
+});
+document.getElementById('ff-dd-close').addEventListener('click', ffCloseDrilldown);
+document.getElementById('ff-dd-prev').addEventListener('click', () => { if (ffDDState.page > 0) { ffDDState.page--; ffLoadPackages(); } });
+document.getElementById('ff-dd-next').addEventListener('click', () => { ffDDState.page++; ffLoadPackages(); });
+document.getElementById('ff-fetch-btn').addEventListener('click', async () => {
+  await fetch('/api/cgr-malware/mal-dates', { method: 'POST' }).catch(() => {});
+  ffAttachDatePolling();
+});
+
+let _ffDatePolling = false;
+function ffAttachDatePolling() {
+  if (_ffDatePolling) return;
+  _ffDatePolling = true;
+  const wrap = document.getElementById('ff-progress');
+  wrap.style.display = 'flex';
+  (async () => {
+    while (true) {
+      const s = await fetch('/api/cgr-malware/mal-dates/status').then(r => r.json()).catch(() => null);
+      const st = s?.state;
+      if (!st) break;
+      const pct = st.total ? Math.min(100, Math.round(st.done / st.total * 100)) : 0;
+      document.getElementById('ff-progress-fill').style.width = `${pct}%`;
+      let txt = st.total ? `${st.done.toLocaleString()} / ${st.total.toLocaleString()}` : st.done.toLocaleString();
+      const elapsedS = st.startedAt ? Math.max(1, (Date.now() - new Date(st.startedAt).getTime()) / 1000) : 1;
+      const rate = st.done > 0 ? st.done / elapsedS : 0;
+      if (rate > 1 && st.total > st.done) { const etaS = (st.total - st.done) / rate; if (etaS > 5) txt += `  ·  ${fmtEta(etaS)} left`; }
+      document.getElementById('ff-progress-count').textContent = txt;
+      if (!st.running) break;
+      await new Promise(r => setTimeout(r, 1000));
+    }
+    _ffDatePolling = false;
+    setTimeout(() => { wrap.style.display = 'none'; }, 800);
+    ffLoadStats();
+  })();
+}
+
 let _lagEnrichPolling = false;
 function lagAttachEnrichPolling() {
   if (_lagEnrichPolling) return;
@@ -5320,7 +5555,7 @@ document.getElementById('lag-dd-next').addEventListener('click', () => { lagDDSt
 
 function lagScheduleStats(immediate = false) {
   clearTimeout(_lagStatsTimer);
-  _lagStatsTimer = setTimeout(() => { lagLoadStats(); lagLoadTable(); }, immediate ? 0 : 300);
+  _lagStatsTimer = setTimeout(() => { lagLoadStats(); ffLoadStats(); lagLoadTable(); }, immediate ? 0 : 300);
 }
 
 document.getElementById('lag-source-chips').addEventListener('click', function(e) {
@@ -5817,7 +6052,7 @@ document.querySelector('[data-tab="vex"]').addEventListener('click', () => {
 // Load on tab switch
 document.querySelector('[data-tab="lag"]').addEventListener('click', () => {
   lagLoadSourceChips();
-  if (!document.getElementById('lag-chart-svg').innerHTML) { lagLoadStats(); lagLoadTable(); }
+  if (!document.getElementById('lag-chart-svg').innerHTML) { lagLoadStats(); ffLoadStats(); lagLoadTable(); }
   else if (!document.getElementById('lag-table-results').innerHTML) lagLoadTable();
 });
 </script>
